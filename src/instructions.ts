@@ -43,7 +43,10 @@ status, weather) use create_automation with the http_request action:
 it calls the API and writes the answer straight into columns via
 responseMapping [{ path, columnId }] (ids from get_board_schema). With the
 "scheduled" trigger the board refreshes itself, so do not tell the user they
-need Make or n8n for this. https only; internal hosts are refused.
+need Make or n8n for this. https only; internal hosts are refused. The
+scheduled trigger takes { intervalHours, runAtHour } (runAtHour is in UTC),
+not a cron expression. send_push is the action that reaches an app user's
+phone.
 
 Only if the user wants an external frontend/app: create_app (needs projectId) ->
 create_app_endpoint (choose exposedColumns; enable rowLevelSecurity whenever
@@ -58,6 +61,20 @@ get_app_spec verbatim. Full reference, including how to read each failure:
 https://tasklite.net/docs Users are the developer's own (any sign-in); their server
 sends X-App-User: <user id> with the key, and endpoints with rowLevelSecurity
 return, update and delete only that user's rows. No user system to build.
+
+rowLevelSecurity.mode picks which rows a user reaches: owner (the rows they
+created, the default), shared (all rows, for authorized users), phone (rows
+carrying their verified phone), relation (rows linked through a relation
+column to the row that stands for them). An app with two kinds of people,
+coaches and their trainees: Coaches in mode phone; Trainees in mode relation
+with relationColumn = its Coach column and identityPhoneColumn = the Coaches
+phone column; a board one hop further (weigh-ins) adds viaColumn. A user "is"
+a row by an invite code (create_app_invite, or allowInvites on the endpoint so
+a coach invites from inside the app), by link_app_user (ids from
+list_app_users), or by a verified phone or email written in the row.
+rowLevelSecurity is replaced whole on update and takes only the listed keys.
+App-level settings (password reset return URLs, account deletion):
+configure_app_settings. Removing an endpoint: delete_app_endpoint.
 
 TaskLite also HOSTS static frontends. deploy_frontend takes the site in one
 of three ways: files (inline path+content, from ChatGPT or any hosted client,
@@ -79,7 +96,9 @@ signs them up through POST /auth/register-external with the organizationId
 and logs them in through POST /auth/login), the organization decides who gets
 in: configure_external_access sets the registration policy ("open", in at
 once; "approval", an admin approves each one, and TaskLite mails the org's
-admins on every signup; "closed", invite only) and appLoginUrl, the page of
+admins on every signup; "invite", only with an invite code from
+create_app_invite, sent as inviteCode with the sign-up call; "closed",
+self-signup refused) and appLoginUrl, the page of
 YOUR app where those users log in. Set appLoginUrl whenever you deploy such an
 app: it is the "Log in" button in the approval email, and without it the
 approved user is told nothing about where to go. Unapproved users are never

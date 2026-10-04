@@ -1,6 +1,6 @@
 {
   "name": "@tasklite/mcp",
-  "version": "0.15.0",
+  "version": "0.16.0",
   "description": "TaskLite MCP server: build a full backend (projects, boards, data, REST endpoints), deploy a frontend onto it, and get a ready-made admin, from Claude Code and other MCP clients",
   "license": "MIT",
   "homepage": "https://tasklite.net",
@@ -37,6 +37,7 @@
   "main": "dist/index.js",
   "scripts": {
     "build": "tsc",
+    "test": "tsc && node --test test/tools.test.mjs",
     "start": "node dist/index.js",
     "dev": "tsc && node dist/index.js"
   },

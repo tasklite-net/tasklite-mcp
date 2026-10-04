@@ -19,9 +19,12 @@ over.
 > **tasklite.net**, published as `@tasklite/mcp` and as `net.tasklite/mcp` in
 > the MCP registry.
 
-## The 48 tools
+## The 63 tools
 
-Every tool declares `readOnlyHint`, `destructiveHint` and `openWorldHint`, so a
+63 when installed locally, 58 over the hosted server (the five account tools
+`sign_up` `connect` `login` `disconnect` `connection_status` exist only
+locally; hosted connections sign in with OAuth). Every tool declares
+`readOnlyHint`, `destructiveHint`, `idempotentHint` and `openWorldHint`, so a
 client can tell what is safe to run unattended.
 
 | Area | Tools |
@@ -30,9 +33,35 @@ client can tell what is safe to run unattended.
 | Structure | `create_project` `create_board` `create_column` `update_board` `update_column` `delete_board` `delete_column` `delete_project` `reorder_columns` `get_board_schema` `list_projects` `list_boards` `export_project` |
 | Data | `query_items` `create_item` `update_item` `set_cell` `delete_item` `search` `fetch` |
 | Comments | `list_comments` `add_comment` `update_comment` `delete_comment` |
-| Apps and API | `build_backend` `create_app` `publish_app` `list_apps` `get_app_spec` `create_app_endpoint` `list_app_endpoints` `update_app_endpoint` `create_app_api_key` |
-| Frontend hosting | `deploy_frontend` `list_deployments` `rollback_deployment` `get_frontend_prompt` |
-| Automation and push | `create_automation` `list_automations` `push_status` `send_test_push` |
+| Files | `request_file_upload` `list_uploaded_files` `revoke_upload_link` |
+| Apps and API | `build_backend` `create_app` `publish_app` `list_apps` `get_app_spec` `create_app_endpoint` `list_app_endpoints` `update_app_endpoint` `delete_app_endpoint` `create_app_api_key` `configure_app_settings` |
+| App users, invites and links | `list_app_users` `create_app_invite` `list_app_invites` `revoke_app_invite` `check_invite_code` `link_app_user` `list_app_user_links` `unlink_app_user` |
+| Frontend hosting | `deploy_frontend` `list_deployments` `get_deployment_files` `rollback_deployment` `get_frontend_prompt` |
+| Automation and push | `create_automation` `update_automation` `list_automations` `push_status` `send_test_push` |
+
+### Apps with two kinds of users
+
+An endpoint's `rowLevelSecurity.mode` decides which rows a signed-in user
+reaches: `owner` (the rows they created), `shared` (every row, for authorized
+users), `phone` (the rows that carry their verified phone) or `relation` (the
+rows linked through a relation column to the row that stands for them). A
+coaching app, coaches and their trainees in one organization, is built from
+these:
+
+| Board | Endpoint security |
+| --- | --- |
+| Coaches | `mode: "phone"`, `phoneColumn`: the phone column. Each coach reads and edits his own row. |
+| Trainees | `mode: "relation"`, `relationColumn`: Trainees.Coach, `identityPhoneColumn`: Coaches.Phone, `allowInvites: true`. A coach sees only his trainees and can invite each to her row. |
+| Weigh-ins (coach) | `mode: "relation"`, `relationColumn`: Weigh-ins.Trainee, `viaColumn`: Trainees.Coach. One more hop: the weigh-ins of all his trainees. |
+| Weigh-ins (trainee) | A second endpoint on the same board: `mode: "relation"`, `relationColumn`: Weigh-ins.Trainee. |
+
+A user "is" a row through an invite code (`create_app_invite`, or minted by a
+coach inside the app when the endpoint has `allowInvites`), through
+`link_app_user`, or with no link at all when their verified phone or email is
+written in the row (`identityPhoneColumn`, `identityEmailColumn`).
+`configure_external_access` with `registrationPolicy: "invite"` lets new people
+in only with a code. `rowLevelSecurity` accepts only the keys the server reads:
+an unknown key is refused, never dropped.
 
 `build_backend` is the one to reach for first: it takes a description of a
 system and creates the project, the boards, their typed columns including the
