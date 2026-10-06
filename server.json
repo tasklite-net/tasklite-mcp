@@ -3,7 +3,7 @@
   "name": "net.tasklite/mcp",
   "title": "TaskLite",
   "description": "tasklite.net: hosted backend, REST API and admin for apps built by AI agents",
-  "version": "0.14.5",
+  "version": "0.16.0",
   "websiteUrl": "https://tasklite.net/docs",
   "repository": {
     "url": "https://github.com/tasklite-net/tasklite-mcp",
@@ -19,7 +19,7 @@
     {
       "registryType": "npm",
       "identifier": "@tasklite/mcp",
-      "version": "0.14.5",
+      "version": "0.16.0",
       "transport": {
         "type": "stdio"
       }

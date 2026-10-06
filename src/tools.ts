@@ -540,7 +540,79 @@ const ANNOTATIONS: Record<string, Record<string, unknown>> = {
     destructiveHint: false,
     idempotentHint: true,
     openWorldHint: false,
-},
+  },
+  delete_app_endpoint: {
+    title: "Delete app endpoint",
+    readOnlyHint: false,
+    destructiveHint: true,
+    idempotentHint: true,
+    openWorldHint: false,
+  },
+  configure_app_settings: {
+    title: "Read or change app settings",
+    readOnlyHint: false,
+    destructiveHint: false,
+    idempotentHint: true,
+    openWorldHint: false,
+  },
+  list_app_users: {
+    title: "List app users",
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: true,
+    openWorldHint: false,
+  },
+  create_app_invite: {
+    title: "Create invite code",
+    readOnlyHint: false,
+    destructiveHint: false,
+    // Each call mints another code.
+    idempotentHint: false,
+    openWorldHint: false,
+  },
+  list_app_invites: {
+    title: "List invite codes",
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: true,
+    openWorldHint: false,
+  },
+  revoke_app_invite: {
+    title: "Revoke invite code",
+    readOnlyHint: false,
+    // Ends the code; the people who already signed up with it stay linked.
+    destructiveHint: true,
+    idempotentHint: true,
+    openWorldHint: false,
+  },
+  check_invite_code: {
+    title: "Check an invite code",
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: true,
+    openWorldHint: false,
+  },
+  link_app_user: {
+    title: "Link a user to a row",
+    readOnlyHint: false,
+    destructiveHint: false,
+    idempotentHint: true,
+    openWorldHint: false,
+  },
+  list_app_user_links: {
+    title: "List a user's row links",
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: true,
+    openWorldHint: false,
+  },
+  unlink_app_user: {
+    title: "Remove a user's row link",
+    readOnlyHint: false,
+    destructiveHint: true,
+    idempotentHint: true,
+    openWorldHint: false,
+  },
 };
 
 // Row-level security of an app endpoint. Up to 0.15 the schema had no `mode`,
@@ -548,25 +620,293 @@ const ANNOTATIONS: Record<string, Record<string, unknown>> = {
 // "shared" was stored as "owner" (the owner of a business then saw none of its
 // orders), and update_app_endpoint dropped rowLevelSecurity altogether, which
 // once left an admin endpoint readable by anyone (23.9).
-const RLS_SCHEMA = z.object({
-  enabled: z
-    .boolean()
-    .describe(
-      "true: every request must carry a signed-in user (the token from sign-in, or the app key with X-App-User)",
-    ),
-  mode: z
-    .enum(["owner", "shared", "phone"])
-    .optional()
-    .describe(
-      '"owner" (default): each user sees and edits only the rows they created. "shared": every user authorized on the app (listed on it, or an owner/admin of the organization) sees and edits every row; the mode for an admin screen or a team system. "phone": a user signed in with a code sent to their phone sees and edits only the rows whose phoneColumn holds that phone, e.g. a directory where each person keeps their own card',
-    ),
-  phoneColumn: z
-    .string()
-    .optional()
-    .describe(
-      'mode "phone" only: id of the column that holds each row\'s phone number (get_board_schema)',
-    ),
-});
+//
+// 0.16 closes that for good: the object is strict. A key this schema does not
+// know is refused with its name instead of being stripped, so a field the
+// backend adds later fails loudly here (and gets added) rather than being
+// stored as something weaker than what was asked. The field names are the
+// backend's own (AppEndpointRowLevelSecurity in app-endpoint.entity.ts);
+// which field goes with which mode is checked by the server, whose message
+// names the field.
+const RLS_MODE_DESCRIPTION =
+  '"owner" (default): each user sees and edits only the rows they created. "shared": every user authorized on the app (listed on it, or an owner/admin of the organization) sees and edits every row; the mode for an admin screen or a team system. "phone": a user signed in with a code sent to their phone sees and edits only the rows whose phoneColumn holds that phone, e.g. a directory where each person keeps their own card, or the Coaches board itself in a coaching app (each coach reads and edits his own row; a POST writes his verified phone into the row whatever the body says). "relation": each user reaches the rows whose relationColumn points at the row that stands for them, e.g. a Trainees board whose "Coach" relation column points at the Coaches board: a coach sees only his trainees. A relation endpoint never returns the row that IS the user, only rows pointing at it, so expose the identity board itself through a second endpoint in mode "phone". In relation mode a new row is linked to the caller by the server, the link cannot be moved with PATCH, and a user who stands for no row gets an empty list on GET and 403 on POST';
+
+const RLS_FIELDS = {
+  phoneColumn:
+    'mode "phone" only, required there: the column that holds each row\'s phone number',
+  emailColumn:
+    'mode "phone" only, optional, next to phoneColumn: a column that holds each row\'s email. A user whose email was proved by a login code also reaches the rows that carry that address; for people whose number takes no SMS (outside Israel the code goes by email, which proves the email, not the phone)',
+  relationColumn:
+    'mode "relation" only, required there: a RELATION column on this endpoint\'s board. A row belongs to the caller when this column points at an item that stands for the caller (or, with viaColumn, at an item that points at one). Example: on the Trainees board, the "Coach" column',
+  viaColumn:
+    'mode "relation" only, optional: one more hop. A RELATION column on the board that relationColumn points to, leading to the board of the caller\'s own items. Example: a Weigh-ins endpoint with relationColumn = Weigh-ins."Trainee" and viaColumn = Trainees."Coach" lets a coach reach the weigh-ins of all his trainees. For the trainee herself, make a second endpoint on the same board with relationColumn = "Trainee" and no viaColumn',
+  identityPhoneColumn:
+    'mode "relation" only, optional: a phone column on the board where the caller\'s own items live (the board relationColumn points to, or with viaColumn the board viaColumn points to). A user whose VERIFIED phone (sign-in by a code sent to that phone) is written in a row there stands for that row, with no invite and no link. Example: Coaches."Phone", so a coach who signed in by phone is his own Coaches row at once. Whoever may write that column decides who the row is, so expose it readOnly wherever it must not move',
+  identityEmailColumn:
+    'mode "relation" only, optional: like identityPhoneColumn, for an email column and a user whose email was verified by a login code',
+  allowInvites:
+    'mode "relation" only, default false: true lets a user of the app mint an invite code for a row they reach through this endpoint (POST /apps/{appSlug}/api/{endpointSlug}/{itemId}/invites with body { maxUses?, expiresInDays?, label? }; the endpoint must also allow POST). A coach invites a trainee to the trainee\'s own row; whoever signs up with the code is linked to that row. Such an invite never grants an access role. Without it only an owner or admin creates invites (create_app_invite)',
+} as const;
+
+export const RLS_SCHEMA = z
+  .object({
+    enabled: z
+      .boolean()
+      .describe(
+        "true: every request must carry a signed-in user (the token from sign-in, or the app key with X-App-User)",
+      ),
+    mode: z
+      .enum(["owner", "shared", "phone", "relation"])
+      .optional()
+      .describe(RLS_MODE_DESCRIPTION),
+    phoneColumn: z
+      .string()
+      .optional()
+      .describe(`${RLS_FIELDS.phoneColumn}. A column id (get_board_schema)`),
+    emailColumn: z
+      .string()
+      .optional()
+      .describe(`${RLS_FIELDS.emailColumn}. A column id (get_board_schema)`),
+    relationColumn: z
+      .string()
+      .optional()
+      .describe(`${RLS_FIELDS.relationColumn}. A column id (get_board_schema)`),
+    viaColumn: z
+      .string()
+      .optional()
+      .describe(
+        `${RLS_FIELDS.viaColumn}. A column id (get_board_schema of that other board)`,
+      ),
+    identityPhoneColumn: z
+      .string()
+      .optional()
+      .describe(
+        `${RLS_FIELDS.identityPhoneColumn}. A column id (get_board_schema of that board)`,
+      ),
+    identityEmailColumn: z
+      .string()
+      .optional()
+      .describe(
+        `${RLS_FIELDS.identityEmailColumn}. A column id (get_board_schema of that board)`,
+      ),
+    allowInvites: z.boolean().optional().describe(RLS_FIELDS.allowInvites),
+  })
+  .strict();
+
+// The same thing inside build_backend, where no column has an id yet: every
+// column is named as the spec names it, and the tool resolves the ids once the
+// columns exist. Strict for the same reason as RLS_SCHEMA.
+export const BUILD_RLS_SCHEMA = z
+  .object({
+    enabled: z
+      .boolean()
+      .optional()
+      .describe("Defaults to true; false leaves this endpoint without row-level security"),
+    mode: z
+      .enum(["owner", "shared", "phone", "relation"])
+      .optional()
+      .describe(RLS_MODE_DESCRIPTION),
+    phoneColumn: z
+      .string()
+      .optional()
+      .describe(`${RLS_FIELDS.phoneColumn}. The NAME of a column of this board in the spec`),
+    emailColumn: z
+      .string()
+      .optional()
+      .describe(`${RLS_FIELDS.emailColumn}. The NAME of a column of this board in the spec`),
+    relationColumn: z
+      .string()
+      .optional()
+      .describe(
+        `${RLS_FIELDS.relationColumn}. The NAME of a relation column of this board in the spec`,
+      ),
+    viaColumn: z
+      .string()
+      .optional()
+      .describe(
+        `${RLS_FIELDS.viaColumn}. The NAME of a relation column of the board relationColumn points to`,
+      ),
+    identityPhoneColumn: z
+      .string()
+      .optional()
+      .describe(
+        `${RLS_FIELDS.identityPhoneColumn}. The NAME of a column of that board in the spec`,
+      ),
+    identityEmailColumn: z
+      .string()
+      .optional()
+      .describe(
+        `${RLS_FIELDS.identityEmailColumn}. The NAME of a column of that board in the spec`,
+      ),
+    allowInvites: z.boolean().optional().describe(RLS_FIELDS.allowInvites),
+  })
+  .strict();
+
+type BuildRls = z.infer<typeof BUILD_RLS_SCHEMA>;
+type BuildRlsBoard = {
+  name: string;
+  columns: Array<{
+    name: string;
+    type: string;
+    relatedBoard?: string;
+    settings?: Record<string, unknown>;
+  }>;
+};
+
+/**
+ * Checks one board's rowLevelSecurity in a build_backend spec against the
+ * spec itself, before anything is created, and says which board and column
+ * each name resolved to. Mirrors the server's assertRowLevelSecurity and
+ * relationPath (tastlite-be app-builder), so a spec the server would refuse
+ * is refused here, where nothing has been built yet.
+ */
+type BuildRlsRefs = Partial<
+  Record<
+    | "phoneColumn"
+    | "emailColumn"
+    | "relationColumn"
+    | "viaColumn"
+    | "identityPhoneColumn"
+    | "identityEmailColumn",
+    { board: string; column: string }
+  >
+>;
+
+export function planBuildRls(
+  board: BuildRlsBoard,
+  rls: BuildRls,
+  boards: BuildRlsBoard[],
+): { problems: string[]; refs: BuildRlsRefs } {
+  const problems: string[] = [];
+  const refs: BuildRlsRefs = {};
+  const where = `${board.name}.rowLevelSecurity`;
+  const mode = rls.mode ?? "owner";
+  const findBoard = (name: string) =>
+    boards.find((b) => b.name.toLowerCase() === name.toLowerCase());
+  const findColumn = (b: BuildRlsBoard, name: string) =>
+    b.columns.find((c) => c.name.toLowerCase() === name.toLowerCase());
+  const targetOf = (c: BuildRlsBoard["columns"][number]) =>
+    String(c.relatedBoard ?? (c.settings as any)?.relatedBoardName ?? "");
+
+  const relationOnly = [
+    "relationColumn",
+    "viaColumn",
+    "identityPhoneColumn",
+    "identityEmailColumn",
+    "allowInvites",
+  ] as const;
+  if (mode !== "relation") {
+    const stray = relationOnly.filter((k) => rls[k] !== undefined);
+    if (stray.length) {
+      problems.push(
+        `${where}: ${stray.join(", ")} only apply to mode "relation" (got "${mode}")`,
+      );
+    }
+  }
+  if (mode !== "phone") {
+    const stray = (["phoneColumn", "emailColumn"] as const).filter(
+      (k) => rls[k] !== undefined,
+    );
+    if (stray.length) {
+      problems.push(
+        `${where}: ${stray.join(", ")} only apply to mode "phone" (got "${mode}")`,
+      );
+    }
+  }
+
+  if (mode === "phone") {
+    if (!rls.phoneColumn) {
+      problems.push(
+        `${where}: mode "phone" needs phoneColumn, the name of the phone column of ${board.name}`,
+      );
+    }
+    for (const k of ["phoneColumn", "emailColumn"] as const) {
+      const name = rls[k];
+      if (!name) continue;
+      const col = findColumn(board, name);
+      if (!col) {
+        problems.push(
+          `${where}.${k}: "${name}" is not a column of ${board.name} (have: ${board.columns.map((c) => c.name).join(", ")})`,
+        );
+      } else {
+        refs[k] = { board: board.name, column: col.name };
+      }
+    }
+  }
+
+  if (mode === "relation") {
+    if (!rls.relationColumn) {
+      problems.push(
+        `${where}: mode "relation" needs relationColumn, the name of the relation column of ${board.name} that points at the row standing for each user`,
+      );
+      return { problems, refs };
+    }
+    const rel = findColumn(board, rls.relationColumn);
+    if (!rel || rel.type !== "relation") {
+      problems.push(
+        `${where}.relationColumn: "${rls.relationColumn}" is not a relation column of ${board.name}`,
+      );
+      return { problems, refs };
+    }
+    refs.relationColumn = { board: board.name, column: rel.name };
+    const first = findBoard(targetOf(rel));
+    // A relation column naming no board of the spec is reported by the
+    // column checks; nothing more can be resolved from here.
+    if (!first) return { problems, refs };
+    let identity = first;
+    if (rls.viaColumn) {
+      const via = findColumn(first, rls.viaColumn);
+      if (!via || via.type !== "relation") {
+        problems.push(
+          `${where}.viaColumn: "${rls.viaColumn}" is not a relation column of ${first.name}, the board relationColumn points to`,
+        );
+        return { problems, refs };
+      }
+      refs.viaColumn = { board: first.name, column: via.name };
+      const next = findBoard(targetOf(via));
+      if (!next) return { problems, refs };
+      identity = next;
+    }
+    for (const k of ["identityPhoneColumn", "identityEmailColumn"] as const) {
+      const name = rls[k];
+      if (!name) continue;
+      const col = findColumn(identity, name);
+      if (!col) {
+        problems.push(
+          `${where}.${k}: "${name}" is not a column of ${identity.name}, the board whose rows stand for the users (have: ${identity.columns.map((c) => c.name).join(", ")})`,
+        );
+      } else {
+        refs[k] = { board: identity.name, column: col.name };
+      }
+    }
+  }
+  return { problems, refs };
+}
+
+/**
+ * Merges a patch into an app's settings the way configure_app_settings
+ * promises: plain objects merge key by key at every depth, arrays and scalars
+ * replace, and null removes the key. The backend stores whatever `settings`
+ * object it is sent, whole, so the merge has to happen on this side.
+ */
+export function mergeSettings(
+  current: Record<string, unknown>,
+  patch: Record<string, unknown>,
+): Record<string, unknown> {
+  const isPlain = (v: unknown): v is Record<string, unknown> =>
+    typeof v === "object" && v !== null && !Array.isArray(v);
+  const out: Record<string, unknown> = { ...current };
+  for (const [key, value] of Object.entries(patch)) {
+    if (value === null) {
+      delete out[key];
+    } else if (isPlain(value)) {
+      out[key] = mergeSettings(isPlain(out[key]) ? out[key] : {}, value);
+    } else {
+      out[key] = value;
+    }
+  }
+  return out;
+}
 
 // An automation filter: every condition must hold for the actions to run.
 const CONDITIONS_SCHEMA = z
@@ -905,17 +1245,17 @@ export function registerTools(
 
   tool(
     "configure_external_access",
-    'Read or change how EXTERNAL users (people who sign up to your app through TaskLite auth) get into an organization. They have two ways in, and both obey the policy below: email and password (POST /auth/register-external with this organizationId, then POST /auth/login), or Google (POST /auth/google-external with a Google ID token and this organizationId). Either way the answer carries a token the app sends as Authorization: Bearer on every App API call. registrationPolicy: "open", in at once; "approval", an organization admin approves each signup (TaskLite mails the admins on every signup, and the person once approved; unapproved users are never billed); "closed", invite only, self-signup refused. appLoginUrl: the page of YOUR app where these users log in, it becomes the "Log in" button in the approval email, so set it whenever you deploy an app that uses this flow; pass "" to clear. Call with no changes to just read the current settings. Requires organization admin.',
+    'Read or change how EXTERNAL users (people who sign up to your app through TaskLite auth) get into an organization. They have two ways in, and both obey the policy below: email and password (POST /auth/register-external with this organizationId, then POST /auth/login), or Google (POST /auth/google-external with a Google ID token and this organizationId). Either way the answer carries a token the app sends as Authorization: Bearer on every App API call. registrationPolicy: "open", in at once; "approval", an organization admin approves each signup (TaskLite mails the admins on every signup, and the person once approved; unapproved users are never billed); "invite", a new person gets in only with an invite code (create_app_invite, or a code a user of the app minted on a relation endpoint with allowInvites): the app sends it as inviteCode with POST /auth/otp/verify, /auth/register-external or /auth/google-external, a sign-up without one is refused with 403 INVITE_REQUIRED and a bad code with 403 INVITE_INVALID, while people who are already members keep signing in as before; "closed" (the default), self-signup refused, external users are created by an admin. Under every policy a valid invite code admits its holder as if the organization were open, so "invite" is the policy for an app where people join only through someone who invited them (a coach inviting trainees). appLoginUrl: the page of YOUR app where these users log in, it becomes the "Log in" button in the approval email, so set it whenever you deploy an app that uses this flow; pass "" to clear. Call with no changes to just read the current settings. Requires organization admin.',
     {
       organizationId: z
         .string()
         .optional()
         .describe("Defaults to the credential organization"),
       registrationPolicy: z
-        .enum(["closed", "approval", "open"])
+        .enum(["closed", "approval", "open", "invite"])
         .optional()
         .describe(
-          "How external sign-ups are admitted: open, approval or closed",
+          "How external sign-ups are admitted: open, approval, invite (only with an invite code) or closed",
         ),
       appLoginUrl: z
         .string()
@@ -957,7 +1297,9 @@ export function registerTools(
             ? "Each signup waits for an admin; admins are emailed with a link to approvalsUrl, and the user is emailed (with appLoginUrl as the button) once approved."
             : (current.externalRegistrationPolicy || "closed") === "open"
               ? "Signups are active immediately."
-              : "Self-signup is refused; external users are created by an admin.",
+              : (current.externalRegistrationPolicy || "closed") === "invite"
+                ? "A new person gets in only with an invite code, sent as inviteCode with the sign-up call (403 INVITE_REQUIRED without one). Mint codes with create_app_invite."
+                : "Self-signup is refused; external users are created by an admin. A valid invite code still admits its holder.",
       });
     },
   );
@@ -2179,7 +2521,7 @@ export function registerTools(
 
   tool(
     "create_app_endpoint",
-    "Expose a board as a REST endpoint of an app: /apps/{appSlug}/api/{slug}. exposedColumns limits which columns are readable/writable. rowLevelSecurity.enabled makes the endpoint per-user: the developer's server sends `X-App-User: <their user id>` next to the API key, and the endpoint returns, updates and deletes ONLY that user's rows (401 without the header). Use it whenever the app has its own users.",
+    "Expose a board as a REST endpoint of an app: /apps/{appSlug}/api/{slug}. exposedColumns limits which columns are readable/writable. rowLevelSecurity.enabled makes the endpoint per-user: the developer's server sends `X-App-User: <their user id>` next to the API key, and the endpoint returns, updates and deletes ONLY that user's rows (401 without the header). Use it whenever the app has its own users. rowLevelSecurity.mode chooses which rows a user reaches: owner (the rows they created), shared (all rows, for authorized users), phone (the rows that carry their verified phone) or relation (the rows linked through a relation column to the row that stands for them). An app with two kinds of people in one organization, coaches and their trainees, is built from these: the Coaches board in mode phone (phoneColumn = its phone column), so each coach reads and edits his own row; Trainees in mode relation with relationColumn = its Coach column and identityPhoneColumn = the Coaches phone column, so a coach who signed in by phone sees only his trainees; boards one hop further (weigh-ins of a trainee) in mode relation with relationColumn = the Trainee column and viaColumn = Trainees.Coach for the coach, plus a second endpoint on the same board without viaColumn for the trainee herself. A trainee becomes her row through an invite code (create_app_invite, or allowInvites so the coach mints it in the app) or link_app_user.",
     {
       appId: z
         .string()
@@ -2220,7 +2562,7 @@ export function registerTools(
           "Columns the endpoint reads and writes, with the JSON key each one gets; without it the endpoint returns bare metadata",
         ),
       rowLevelSecurity: RLS_SCHEMA.optional().describe(
-        "Row-level security. Off: whoever holds the app key reads everything. On: every request must name a signed-in user, and mode decides which rows they reach",
+        "Row-level security. Off: whoever holds the app key reads everything. On: every request must name a signed-in user, and mode decides which rows they reach. Only the keys listed here exist; an unknown key is refused, not ignored",
       ),
       organizationId: z
         .string()
@@ -2319,7 +2661,7 @@ export function registerTools(
       rowLevelSecurity: RLS_SCHEMA.nullable()
         .optional()
         .describe(
-          "Replacement row-level security (same shape as create_app_endpoint); null turns it off",
+          "Replacement row-level security (same shape as create_app_endpoint); null turns it off. The object replaces the stored one whole, it is not merged: to change one field, read the current value with list_app_endpoints and send every field again (enabled, mode and the columns of that mode), or the ones left out are lost",
         ),
       isActive: z.boolean().optional().describe("Whether it is active"),
       organizationId: z
@@ -2336,6 +2678,366 @@ export function registerTools(
           "PATCH",
           `/organizations/${orgId}/apps/${appId}/endpoints/${endpointId}`,
           body,
+        ),
+      );
+    },
+  );
+
+  tool(
+    "delete_app_endpoint",
+    "Delete an endpoint of an app for good: /apps/{appSlug}/api/{slug} stops answering at once and the endpoint cannot be brought back (create it again with create_app_endpoint). The board and its rows are not touched. Confirm with the user first: a frontend that calls this endpoint breaks. To take an endpoint offline and keep its definition, use update_app_endpoint with isActive false instead (list_app_endpoints shows active endpoints only, so keep the id). Get the endpoint id from list_app_endpoints.",
+    {
+      appId: z
+        .string()
+        .describe("App id or slug (from list_apps / create_app)"),
+      endpointId: z.string().describe("Endpoint id (from list_app_endpoints)"),
+      organizationId: z
+        .string()
+        .optional()
+        .describe(
+          "Organization id; defaults to the credential organization when omitted",
+        ),
+    },
+    async ({ appId, endpointId, organizationId }) => {
+      const orgId = await resolveOrg(organizationId);
+      await getApi().request(
+        "DELETE",
+        `/organizations/${orgId}/apps/${appId}/endpoints/${endpointId}`,
+      );
+      return ok({ deleted: true, endpointId });
+    },
+  );
+
+  // ── App settings ───────────────────────────────────────────────────────────
+
+  tool(
+    "configure_app_settings",
+    'Read or change the settings object of an app. Call with only appId to read. To change, pass set: the keys in it are MERGED into the current settings (objects merge key by key at every depth, arrays and plain values replace, null removes a key). The server itself does not merge: PATCH replaces the whole settings object with what it is sent, so this tool reads the app, merges, and writes the full object back; two writers at the same moment can still overwrite each other, so do not run it in parallel on one app. Settings the server reads: passwordReset.returnUrls (array of up to 50 URLs the "reset password" email may send a user back to, matched by scheme, host, port and path prefix; needed only for a custom app scheme such as myapp://reset or a domain other than the app\'s own {slug}.tasklite.dev and its connected custom domains, which are always allowed; http is never accepted), language (the language of the password reset email: a value starting with "he" gives Hebrew, any other value English; left out, the user\'s own language decides), endUserDeletion.rows ("delete": when an end user deletes their account, the rows they wrote in this app are deleted with it and erased for good 30 days later; left out, the rows stay with the author shown as a deleted account). Other keys are stored as given and returned, and the server does not act on them.',
+    {
+      appId: z
+        .string()
+        .describe("App id or slug (from list_apps / create_app)"),
+      set: z
+        .record(z.any())
+        .optional()
+        .describe(
+          'Keys to merge into the settings, e.g. { passwordReset: { returnUrls: ["myapp://reset"] } } or { endUserDeletion: { rows: "delete" } }. null removes a key: { language: null }. Omit to read without changing anything',
+        ),
+      organizationId: z
+        .string()
+        .optional()
+        .describe(
+          "Organization id; defaults to the credential organization when omitted",
+        ),
+    },
+    async ({
+      appId,
+      set,
+      organizationId,
+    }: {
+      appId: string;
+      set?: Record<string, unknown>;
+      organizationId?: string;
+    }) => {
+      const orgId = await resolveOrg(organizationId);
+      const app = await getApi().request<any>(
+        "GET",
+        `/organizations/${orgId}/apps/${appId}`,
+      );
+      const current: Record<string, unknown> =
+        app && typeof app.settings === "object" && app.settings !== null
+          ? app.settings
+          : {};
+      if (!set || Object.keys(set).length === 0) {
+        return ok({ appId: app?.id ?? appId, settings: current, changed: false });
+      }
+      const merged = mergeSettings(current, set);
+      const updated = await getApi().request<any>(
+        "PATCH",
+        `/organizations/${orgId}/apps/${appId}`,
+        { settings: merged },
+      );
+      return ok({
+        appId: updated?.id ?? app?.id ?? appId,
+        settings: updated?.settings ?? merged,
+        changed: true,
+        previous: current,
+      });
+    },
+  );
+
+  // ── App users, invite codes and user-to-row links ─────────────────────────
+  // What row-level security mode "relation" reads: a user "is" a row either
+  // by a link (made by an invite code or by link_app_user) or by a verified
+  // phone or email written in the row (identityPhoneColumn/identityEmailColumn).
+
+  tool(
+    "list_app_users",
+    "List the end users of an app: everyone who ever called it with X-App-User or signed in to it with a code. Each has userId (the id link_app_user, list_app_user_links and send_test_push take), externalId (the developer's own id for them, or null for a user who signed in by code), name, source (api or otp), role (viewer, editor or submitter; editor when never set), isActive, lastSeenAt and itemCount (rows they own on the app's boards). Use it to find the userId of the person to link to a row.",
+    {
+      appId: z
+        .string()
+        .describe("App id or slug (from list_apps / create_app)"),
+      organizationId: z
+        .string()
+        .optional()
+        .describe(
+          "Organization id; defaults to the credential organization when omitted",
+        ),
+    },
+    async ({ appId, organizationId }) => {
+      const orgId = await resolveOrg(organizationId);
+      return ok(
+        await getApi().request(
+          "GET",
+          `/organizations/${orgId}/apps/${appId}/users`,
+        ),
+      );
+    },
+  );
+
+  tool(
+    "create_app_invite",
+    'Create an invite code for an app (8 characters shown as XXXX-XXXX, typed without regard to case or the dash). The person signs up or signs in through the app with the code: the app sends it as inviteCode with POST /auth/otp/verify, /auth/register-external or /auth/google-external, after it may check it with POST /auth/invites/check. An invite does one or both of two things, and must do at least one: itemId links the new user to that row, so they "are" the row for every endpoint in row-level security mode "relation" (invite a trainee to her own Trainees row, or a coach to his Coaches row); role puts them on the app\'s access list (viewer, editor or submitter), which is what mode "shared" endpoints check. A valid code also admits a new person into an organization whose registration policy is "invite" or "closed" (configure_external_access). An existing access row is never changed by an invite: it does not re-enable a user who was switched off and does not raise a role. Requires organization owner or admin (an editor gets 403). To let the app\'s own users invite (a coach invites his trainees from inside the app), set allowInvites on the relation endpoint instead; the app then calls POST /apps/{appSlug}/api/{endpointSlug}/{itemId}/invites.',
+    {
+      appId: z
+        .string()
+        .describe("App id or slug (from list_apps / create_app)"),
+      itemId: z
+        .string()
+        .optional()
+        .describe(
+          "Id of the row the new user becomes (from query_items); any live row in the app's organization. Required unless role is given",
+        ),
+      role: z
+        .enum(["viewer", "editor", "submitter"])
+        .optional()
+        .describe(
+          "App-level access role granted on sign-up: viewer (reads), submitter (creates), editor (reads and writes). Omit to grant no access row. Required unless itemId is given",
+        ),
+      maxUses: z
+        .number()
+        .int()
+        .min(1)
+        .max(1000)
+        .optional()
+        .describe(
+          "How many people may use the code, 1 to 1000; defaults to 1 (one person)",
+        ),
+      expiresInDays: z
+        .number()
+        .min(1)
+        .max(365)
+        .optional()
+        .describe("Days until the code stops working, 1 to 365; defaults to 30"),
+      label: z
+        .string()
+        .max(120)
+        .optional()
+        .describe(
+          'Shown to whoever checks the code before signing up, e.g. "Dana, trainee of coach Avi"; up to 120 characters. Do not put anything private in it: the check is public',
+        ),
+      organizationId: z
+        .string()
+        .optional()
+        .describe(
+          "Organization id; defaults to the credential organization when omitted",
+        ),
+    },
+    async ({
+      appId,
+      itemId,
+      role,
+      maxUses,
+      expiresInDays,
+      label,
+      organizationId,
+    }: {
+      appId: string;
+      itemId?: string;
+      role?: string;
+      maxUses?: number;
+      expiresInDays?: number;
+      label?: string;
+      organizationId?: string;
+    }) => {
+      if (!itemId && !role) {
+        return ok({
+          error:
+            "An invite has to do something: pass itemId (the row the new user becomes), role (viewer, editor or submitter), or both.",
+        });
+      }
+      const orgId = await resolveOrg(organizationId);
+      const body: Record<string, unknown> = {};
+      if (itemId !== undefined) body.itemId = itemId;
+      if (role !== undefined) body.role = role;
+      if (maxUses !== undefined) body.maxUses = maxUses;
+      if (expiresInDays !== undefined) body.expiresInDays = expiresInDays;
+      if (label !== undefined) body.label = label;
+      const invite = await getApi().request<any>(
+        "POST",
+        `/organizations/${orgId}/apps/${appId}/invites`,
+        body,
+      );
+      return ok({
+        invite,
+        howToUse:
+          'Give the code to the person. The app sends it as "inviteCode" in the body of POST /auth/otp/verify, /auth/register-external or /auth/google-external. POST /auth/invites/check { "code" } tells the app, without a token, whether it still works.',
+      });
+    },
+  );
+
+  tool(
+    "list_app_invites",
+    "List the invite codes of an app, newest first (the latest 200): the ones created with create_app_invite and the ones the app's own users minted through a relation endpoint with allowInvites (createdVia admin or app). Each carries id, code, itemId, role, label, maxUses, useCount, expiresAt, revokedAt and status: active, used (no uses left), expired or revoked.",
+    {
+      appId: z
+        .string()
+        .describe("App id or slug (from list_apps / create_app)"),
+      organizationId: z
+        .string()
+        .optional()
+        .describe(
+          "Organization id; defaults to the credential organization when omitted",
+        ),
+    },
+    async ({ appId, organizationId }) => {
+      const orgId = await resolveOrg(organizationId);
+      return ok(
+        await getApi().request(
+          "GET",
+          `/organizations/${orgId}/apps/${appId}/invites`,
+        ),
+      );
+    },
+  );
+
+  tool(
+    "revoke_app_invite",
+    "Revoke an invite code so nobody else can sign up with it. People who already used it stay linked to their row and keep their access; to cut one of them off use unlink_app_user. Cannot be undone, create a new invite instead. Requires organization owner or admin. Get the invite id (not the code) from list_app_invites.",
+    {
+      appId: z
+        .string()
+        .describe("App id or slug (from list_apps / create_app)"),
+      inviteId: z
+        .string()
+        .describe("Invite id, the id field from list_app_invites (a UUID, not the code)"),
+      organizationId: z
+        .string()
+        .optional()
+        .describe(
+          "Organization id; defaults to the credential organization when omitted",
+        ),
+    },
+    async ({ appId, inviteId, organizationId }) => {
+      const orgId = await resolveOrg(organizationId);
+      return ok(
+        await getApi().request(
+          "DELETE",
+          `/organizations/${orgId}/apps/${appId}/invites/${inviteId}`,
+        ),
+      );
+    },
+  );
+
+  tool(
+    "check_invite_code",
+    'Check whether an invite code works right now, the way an app does before sign-up (POST /auth/invites/check, the same public route, limited to 10 calls a minute per address). A working code answers { valid: true, organizationId, app: { name, slug }, label, expiresAt }; anything else (unknown, revoked, expired, used up, its row deleted, its app switched off or deleted) answers only { valid: false }, with no reason, by design. It does not use the code up. For the reason a code stopped working, read its status in list_app_invites.',
+    {
+      code: z
+        .string()
+        .describe('The invite code, e.g. "K7PM-4XQ2"; case and the dash do not matter'),
+    },
+    async ({ code }: { code: string }) =>
+      ok(await getApi().request("POST", "/auth/invites/check", { code })),
+  );
+
+  tool(
+    "link_app_user",
+    'Link an existing user of an app to a row, so the user "is" that row for every endpoint in row-level security mode "relation": link a coach to his Coaches row and he reaches the trainees whose Coach column points at it. This is the manual form of what an invite code does at sign-up; use it for someone who already has an account (find the userId with list_app_users). A user may be linked to several rows, and linking the same pair again changes nothing. The user must already be a member of the app\'s organization (anyone who signed in to the app is) and the row must be a live row in that organization, otherwise 404. Requires organization owner or admin.',
+    {
+      appId: z
+        .string()
+        .describe("App id or slug (from list_apps / create_app)"),
+      userId: z
+        .string()
+        .describe("The user's id (userId from list_app_users), a UUID; not their externalId"),
+      itemId: z
+        .string()
+        .describe("Id of the row that stands for this user (from query_items)"),
+      organizationId: z
+        .string()
+        .optional()
+        .describe(
+          "Organization id; defaults to the credential organization when omitted",
+        ),
+    },
+    async ({ appId, userId, itemId, organizationId }) => {
+      const orgId = await resolveOrg(organizationId);
+      return ok(
+        await getApi().request(
+          "POST",
+          `/organizations/${orgId}/apps/${appId}/users/${userId}/links`,
+          { itemId },
+        ),
+      );
+    },
+  );
+
+  tool(
+    "list_app_user_links",
+    'List the rows one user of an app is linked to, oldest first: each link has itemId, source (invite or admin) and createdAt. These are the rows the user "is" under row-level security mode "relation". A user can also stand for a row with no link at all, through identityPhoneColumn or identityEmailColumn; those matches are computed on every request and do not appear here.',
+    {
+      appId: z
+        .string()
+        .describe("App id or slug (from list_apps / create_app)"),
+      userId: z
+        .string()
+        .describe("The user's id (userId from list_app_users), a UUID"),
+      organizationId: z
+        .string()
+        .optional()
+        .describe(
+          "Organization id; defaults to the credential organization when omitted",
+        ),
+    },
+    async ({ appId, userId, organizationId }) => {
+      const orgId = await resolveOrg(organizationId);
+      return ok(
+        await getApi().request(
+          "GET",
+          `/organizations/${orgId}/apps/${appId}/users/${userId}/links`,
+        ),
+      );
+    },
+  );
+
+  tool(
+    "unlink_app_user",
+    "Remove the link between a user of an app and a row: the user stops being that row, and at once loses the rows of every relation endpoint they reached through it. The account, the row and the user's app access are not touched, and nothing is deleted. A user matched to the row by identityPhoneColumn or identityEmailColumn still reaches it; change the phone or email in the row to end that. Requires organization owner or admin. Removing a link that does not exist also answers success.",
+    {
+      appId: z
+        .string()
+        .describe("App id or slug (from list_apps / create_app)"),
+      userId: z
+        .string()
+        .describe("The user's id (userId from list_app_users), a UUID"),
+      itemId: z
+        .string()
+        .describe("Id of the linked row (itemId from list_app_user_links)"),
+      organizationId: z
+        .string()
+        .optional()
+        .describe(
+          "Organization id; defaults to the credential organization when omitted",
+        ),
+    },
+    async ({ appId, userId, itemId, organizationId }) => {
+      const orgId = await resolveOrg(organizationId);
+      return ok(
+        await getApi().request(
+          "DELETE",
+          `/organizations/${orgId}/apps/${appId}/users/${userId}/links/${itemId}`,
         ),
       );
     },
@@ -2431,7 +3133,7 @@ export function registerTools(
 
   tool(
     "build_backend",
-    'Build a whole backend in one call from a spec you compose: the project, its boards, their typed columns (including relations between the boards), optional sample rows, and optionally a published REST API with one endpoint per board and a server-side key. Use it whenever the user describes a system ("a backend for my repair shop: customers, orders, payments") instead of calling create_project, create_board, create_column, create_app, publish_app, create_app_endpoint and create_app_api_key one by one. You do the design, pick column types by meaning (phone, date, currency, dropdown/status with options for closed choices), link boards with a relation column (type "relation", relatedBoard: "<board name in this spec>", relationType: many_to_one for an order→customer link), and this tool executes it and returns one compact summary. API field names are derived from column names and never collide with reserved item fields, so there is nothing to retry. Boards are created as plain data tables (kind "data": only the columns you define, no task fields); set kind "tasks" on a board where people track work to do and want status, priority, assignee and due date built in. Every row still has a title.',
+    'Build a whole backend in one call from a spec you compose: the project, its boards, their typed columns (including relations between the boards), optional sample rows, and optionally a published REST API with one endpoint per board and a server-side key. Use it whenever the user describes a system ("a backend for my repair shop: customers, orders, payments") instead of calling create_project, create_board, create_column, create_app, publish_app, create_app_endpoint and create_app_api_key one by one. You do the design, pick column types by meaning (phone, date, currency, dropdown/status with options for closed choices), link boards with a relation column (type "relation", relatedBoard: "<board name in this spec>", relationType: many_to_one for an order→customer link), and this tool executes it and returns one compact summary. API field names are derived from column names and never collide with reserved item fields, so there is nothing to retry. Boards are created as plain data tables (kind "data": only the columns you define, no task fields); set kind "tasks" on a board where people track work to do and want status, priority, assignee and due date built in. Every row still has a title. When the API has its own users, api.rowLevelSecurity: true gives every endpoint mode "owner"; a board may carry its own rowLevelSecurity instead (mode shared, phone or relation, with columns named as in this spec), e.g. Coaches { mode: "phone", phoneColumn: "Phone" } and Trainees { mode: "relation", relationColumn: "Coach", identityPhoneColumn: "Phone", allowInvites: true }.',
     {
       project: z
         .object({
@@ -2520,6 +3222,9 @@ export function registerTools(
               )
               .min(1)
               .describe("Typed columns of the board"),
+            rowLevelSecurity: BUILD_RLS_SCHEMA.optional().describe(
+              'Row-level security of this board\'s endpoint, used only when "api" is given; overrides api.rowLevelSecurity for this board. Columns are given by NAME as written in this spec (the ids do not exist yet). Only the keys listed here exist; an unknown key is refused, not ignored',
+            ),
             rows: z
               .array(z.record(z.any()))
               .optional()
@@ -2546,7 +3251,7 @@ export function registerTools(
             .boolean()
             .optional()
             .describe(
-              "true when the app has its own users and each may see only their rows (the caller then sends X-App-User)",
+              'true when the app has its own users and each may see only their rows (the caller then sends X-App-User): every endpoint gets mode "owner", except a board that carries its own rowLevelSecurity. For shared, phone or relation modes set rowLevelSecurity on the board itself',
             ),
         })
         .optional()
@@ -2687,6 +3392,21 @@ export function registerTools(
             }
           }
         }
+      }
+      // Row-level security named per board: every column it names must be in
+      // the spec, on the board the server will look for it on.
+      const rlsRefs = new Map<string, BuildRlsRefs>();
+      for (const b of boards) {
+        if (!b.rowLevelSecurity) continue;
+        if (!api) {
+          problems.push(
+            `${b.name}.rowLevelSecurity: row-level security belongs to an endpoint, and this spec has no "api". Add api, or remove it.`,
+          );
+          continue;
+        }
+        const plan = planBuildRls(b, b.rowLevelSecurity, boards);
+        problems.push(...plan.problems);
+        rlsRefs.set(b.name.toLowerCase(), plan.refs);
       }
       if (problems.length) return ok({ built: false, problems });
 
@@ -2954,7 +3674,55 @@ export function registerTools(
             ? api.methods
             : ["GET", "POST", "PATCH", "DELETE"];
           const endpoints: Array<Record<string, unknown>> = [];
-          for (const b of outBoards) {
+          // The column names of each board's rowLevelSecurity, now as ids.
+          const columnId = (ref?: { board: string; column: string }) =>
+            ref
+              ? outBoards
+                  .find((x) => x.name.toLowerCase() === ref.board.toLowerCase())
+                  ?.columns.find(
+                    (c) => c.name.toLowerCase() === ref.column.toLowerCase(),
+                  )?.id
+              : undefined;
+          const rlsFor = (
+            boardIndex: number,
+          ): Record<string, unknown> | undefined => {
+            const spec = boards[boardIndex].rowLevelSecurity as
+              | BuildRls
+              | undefined;
+            if (!spec) {
+              return api.rowLevelSecurity ? { enabled: true } : undefined;
+            }
+            const refs =
+              rlsRefs.get(boards[boardIndex].name.toLowerCase()) || {};
+            const out: Record<string, unknown> = {
+              enabled: spec.enabled ?? true,
+            };
+            if (spec.mode) out.mode = spec.mode;
+            for (const k of [
+              "phoneColumn",
+              "emailColumn",
+              "relationColumn",
+              "viaColumn",
+              "identityPhoneColumn",
+              "identityEmailColumn",
+            ] as const) {
+              if (spec[k] === undefined) continue;
+              const id = columnId(refs[k]);
+              if (!id) {
+                throw new Error(
+                  `${boards[boardIndex].name}.rowLevelSecurity.${k}: column "${spec[k]}" was not found among the columns just created`,
+                );
+              }
+              out[k] = id;
+            }
+            if (spec.allowInvites !== undefined)
+              out.allowInvites = spec.allowInvites;
+            return out;
+          };
+          let anyRls = false;
+          for (const [bi, b] of outBoards.entries()) {
+            const rowLevelSecurity = rlsFor(bi);
+            if (rowLevelSecurity?.enabled) anyRls = true;
             await client.request(
               "POST",
               `/organizations/${orgId}/apps/${app.id}/endpoints`,
@@ -2967,9 +3735,7 @@ export function registerTools(
                   columnId: c.id,
                   alias: c.alias,
                 })),
-                ...(api.rowLevelSecurity
-                  ? { rowLevelSecurity: { enabled: true } }
-                  : {}),
+                ...(rowLevelSecurity ? { rowLevelSecurity } : {}),
               },
             );
             endpoints.push({
@@ -2977,6 +3743,11 @@ export function registerTools(
               url: `${client.apiUrl}/apps/${app.slug}/api/${b.slug}`,
               methods,
               fields: b.columns.map((c) => c.alias),
+              // Shown only where a board set its own, so the result of a
+              // plain build stays what it was.
+              ...(boards[bi].rowLevelSecurity && rowLevelSecurity
+                ? { rowLevelSecurity }
+                : {}),
             });
           }
           const writes = methods.some((m: string) => m !== "GET");
@@ -2999,7 +3770,7 @@ export function registerTools(
             scopes,
             keyRule:
               "This is the only time the key is shown. Keep it server-side (env var, API route); send it as Authorization: Bearer <key>." +
-              (api.rowLevelSecurity
+              (anyRls
                 ? " Row-level security is on: also send X-App-User: <your user id> on every call."
                 : ""),
             adminUrl: client.appUrl(`/apps/${app.id}`),
@@ -3064,7 +3835,7 @@ export function registerTools(
 
   tool(
     "create_automation",
-    'Create an automation on a board: when something happens, do something. The most useful action here is http_request, which calls an external API and writes the answer back into columns, pair it with the "scheduled" trigger and the board keeps itself up to date (prices, exchange rates, shipment status, weather). Triggers: item_created, status_changed, column_value_changed, date_approaching, scheduled. Actions: http_request, send_notification, send_email, change_status, set_column_value, create_cross_board_item, send_webhook. Two more things every action list can use: a { type: "delay", config: { minutes | hours | days } } action pauses the run and resumes the actions after it later (reminders, follow-ups); and any network action (http_request, send_webhook, send_email, send_whatsapp) may carry config.retry: { attempts (1-5), delaySeconds (1-60) }. send_webhook accepts config.secret for an HMAC signature. create_cross_board_item copies a new row to another board: config { targetBoardId, title?: "{{item.title}}", columnValues: { "<column id on the TARGET board>": "{{<column NAME on this board>}}" } }; there is no mapping field, and a column left out is not copied. To act only on some rows pass conditions, e.g. [{ field: "<column id on this board>", operator: "equals", value: "New seller" }]. Change an automation later with update_automation; call list_automations first so you do not add a second one that does the same thing.',
+    'Create an automation on a board: when something happens, do something. The most useful action here is http_request, which calls an external API and writes the answer back into columns, pair it with the "scheduled" trigger and the board keeps itself up to date (prices, exchange rates, shipment status, weather). Triggers: item_created, status_changed, column_value_changed, date_approaching, scheduled. Actions: http_request, send_notification, send_email, send_push, change_status, set_column_value, create_cross_board_item, send_webhook. The scheduled trigger has no cron expression: the server checks once an hour, and triggerConfig takes { intervalHours, runAtHour } only (intervalHours: at least this many hours between runs, default 24; runAtHour: 0-23, run only during that hour of the day in UTC, not in the user\'s time zone, so convert: 08:00 in Israel is runAtHour 5 in summer and 6 in winter). A scheduled run executes the actions once for every row of the board that passes conditions, so filter with conditions. send_push sends a notification to the phones of app users through the app\'s own Firebase project (set up once per app: push_status; try it with send_test_push). Its config: { title, body, data, userIds, recipientsFromRelation, includeRowOwner, sound, badge, dataOnly }. title and body take {{column name}} placeholders, title defaults to the row title. Recipients are the union of: the row\'s owner under row-level security (includeRowOwner, default true; false leaves them out), userIds (fixed user ids, as in list_app_users), and recipientsFromRelation, a dotted path of column NAMES such as "Client.Coach.Coach user" that walks relation columns from this row and whose LAST segment must be a people column holding user ids (a single segment is a people column on this board); it does not resolve the user linked to a row by an invite or by phone, so without such a people column use userIds or the row owner. data is a flat object of strings the app reads to decide where to open (itemId and boardId are added). sound: "default" or the file name of a sound bundled in the app; badge: 0 to 99999, 0 clears; dataOnly: true shows nothing and delivers only data (no title, body, sound or badge; iOS may throttle or drop it). With no recipient the action is skipped, not failed. Two more things every action list can use: a { type: "delay", config: { minutes | hours | days } } action pauses the run and resumes the actions after it later (reminders, follow-ups); and any network action (http_request, send_webhook, send_email, send_whatsapp) may carry config.retry: { attempts (1-5), delaySeconds (1-60) }. send_webhook accepts config.secret for an HMAC signature. create_cross_board_item copies a new row to another board: config { targetBoardId, title?: "{{item.title}}", columnValues: { "<column id on the TARGET board>": "{{<column NAME on this board>}}" } }; there is no mapping field, and a column left out is not copied. To act only on some rows pass conditions, e.g. [{ field: "<column id on this board>", operator: "equals", value: "New seller" }]. Change an automation later with update_automation; call list_automations first so you do not add a second one that does the same thing.',
     {
       projectId: z
         .string()
@@ -3082,13 +3853,13 @@ export function registerTools(
           "scheduled",
         ])
         .describe(
-          "Event that starts the automation: item_created, status_changed, column_value_changed, date_approaching, or scheduled (cron)",
+          "Event that starts the automation: item_created, status_changed, column_value_changed, date_approaching, or scheduled (checked hourly; an interval in hours and an optional hour of the day in UTC, not a cron expression)",
         ),
       triggerConfig: z
         .record(z.any())
         .optional()
         .describe(
-          'e.g. { cron: "0 8 * * *" } for scheduled, { columnName } for column_value_changed',
+          'For scheduled: { intervalHours?: number (default 24), runAtHour?: 0-23 in UTC }, e.g. { intervalHours: 1 } for every hour, or { runAtHour: 5, intervalHours: 23 } for once a day at 05:00 UTC. The interval is measured from the previous run, which ends a little after the hour, so with runAtHour use 23, not 24: with 24 the next day\'s check falls just short and the run slips a day. A cron field is not read. For column_value_changed: { columnName }',
         ),
       actions: z
         .array(
@@ -3096,12 +3867,12 @@ export function registerTools(
             type: z
               .string()
               .describe(
-                "Column type: text, rich_text, number, status, date, datetime, duration, people, checkbox, dropdown, label, priority, link, email, phone, relation, lookup, rollup, rating, currency, file",
+                "Action type: http_request, send_notification, send_email, send_push, change_status, set_column_value, create_cross_board_item, send_webhook, send_whatsapp, delay",
               ),
             config: z
               .record(z.any())
               .describe(
-                "Action-specific config, e.g. { url, method, headers, responseMapping } for http_request",
+                'Action-specific config, e.g. { url, method, headers, responseMapping } for http_request, or { title, body, recipientsFromRelation, includeRowOwner, userIds, data, sound, badge, dataOnly } for send_push',
               ),
           }),
         )
@@ -3181,7 +3952,9 @@ export function registerTools(
       triggerConfig: z
         .record(z.any())
         .optional()
-        .describe("New trigger config"),
+        .describe(
+          "New trigger config, same shape as in create_automation (scheduled: { intervalHours, runAtHour in UTC }, no cron)",
+        ),
       actions: z
         .array(
           z.object({

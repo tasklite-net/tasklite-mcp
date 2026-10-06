@@ -42,6 +42,39 @@ Call `connection_status`.
    URL. Hosted pages call the API at the relative path `/api/{endpoint}`, so
    they need no key and no base URL.
 
+## Apps with their own users
+
+`rowLevelSecurity.mode` on an endpoint decides which rows a signed-in user
+reaches: `owner` (the rows they created, the default), `shared` (every row, for
+authorized users), `phone` (the rows that carry their verified phone),
+`relation` (the rows linked through a relation column to the row that stands
+for them). For two kinds of people in one app, coaches and their trainees:
+
+- Coaches board: `mode: "phone"`, `phoneColumn` = its phone column.
+- Trainees board: `mode: "relation"`, `relationColumn` = its Coach column,
+  `identityPhoneColumn` = the Coaches phone column, `allowInvites: true` so a
+  coach can invite a trainee from inside the app.
+- A board one hop further (weigh-ins of a trainee): `relationColumn` = its
+  Trainee column, `viaColumn` = Trainees.Coach for the coach; a second endpoint
+  without `viaColumn` for the trainee herself.
+
+Tools around it: `create_app_invite` / `list_app_invites` / `revoke_app_invite`
+/ `check_invite_code` (invite codes), `list_app_users` / `link_app_user` /
+`list_app_user_links` / `unlink_app_user` (who is which row),
+`configure_external_access` with `registrationPolicy: "invite"` (new people
+only with a code), `configure_app_settings` (reads and merges app settings),
+`delete_app_endpoint`. `update_app_endpoint` replaces `rowLevelSecurity` whole:
+send every field again. `build_backend` takes the same thing per board, with
+columns by name.
+
+## Automations
+
+`create_automation`, `update_automation`, `list_automations`. The `scheduled`
+trigger is checked hourly and takes `{ intervalHours, runAtHour }` with
+`runAtHour` in UTC; it reads no cron expression. `send_push` notifies app
+users on their phones (`push_status` first, `send_test_push` to try); the last
+segment of its `recipientsFromRelation` path must be a people column.
+
 ## Schema patterns (the value you add)
 
 Don't ask the user to design tables. Infer a sound schema from their domain:

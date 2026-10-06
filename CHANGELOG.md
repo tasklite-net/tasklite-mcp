@@ -3,6 +3,71 @@
 All notable changes to `@tasklite/mcp`. Versions that were never published
 are folded into the next published one, so the numbers on npm may skip.
 
+## 0.16.0, 2026-10-04
+
+An app with two kinds of users can be built through the connector.
+
+A coaching app has coaches and their trainees in one organization: a coach
+must see only his trainees, a trainee only her own rows. The server has had
+row-level security by relation, invite codes and user-to-row links for a
+while, all over REST. The connector knew none of it, so a developer building
+through it had to leave it and call the API by hand, and a `rowLevelSecurity`
+set that way was at risk the next time `update_app_endpoint` touched it.
+
+### Added
+- `rowLevelSecurity.mode: "relation"` on `create_app_endpoint` and
+  `update_app_endpoint`, with `relationColumn`, `viaColumn`,
+  `identityPhoneColumn`, `identityEmailColumn` and `allowInvites`; and
+  `emailColumn` next to `phoneColumn` in mode `phone`. The names are the
+  server's own.
+- `build_backend`: a board may carry its own `rowLevelSecurity` (any mode),
+  with columns given by name as in the spec; the ids are resolved once the
+  columns exist, and a name that matches nothing is refused before anything
+  is created. `api.rowLevelSecurity: true` still means mode `owner` for every
+  other board.
+- `create_app_invite`, `list_app_invites`, `revoke_app_invite`,
+  `check_invite_code`: invite codes that link a new user to a row, grant an
+  app role, or both.
+- `list_app_users`, `link_app_user`, `list_app_user_links`, `unlink_app_user`:
+  who uses the app, and which rows each of them stands for.
+- `configure_external_access` takes `registrationPolicy: "invite"`: new people
+  get in only with an invite code.
+- `configure_app_settings`: reads an app's settings, or merges keys into them.
+  The server replaces `settings` whole, so the tool reads, merges and writes
+  the full object back.
+- `delete_app_endpoint`.
+- `npm test`: offline tests of the built server against a recording fake API.
+
+### Changed
+- `rowLevelSecurity` is strict: a key the schema does not know is refused by
+  name instead of being dropped. Dropping is what stored every "shared"
+  endpoint as "owner" before 0.15. `filterColumn` and `filterByUserId`, which
+  the server refuses anyway, are now refused here.
+- `update_app_endpoint` says that `rowLevelSecurity` replaces the stored
+  object whole.
+
+### Fixed
+- `create_automation` described the scheduled trigger with `{ cron }`. The
+  engine reads no cron expression: it checks hourly and takes
+  `{ intervalHours, runAtHour }`, with `runAtHour` in UTC. The description now
+  says so, and that a daily run at a fixed hour wants `intervalHours: 23`.
+- `send_push` was missing from the list of actions. It is listed with its
+  config (`title`, `body`, `data`, `userIds`, `recipientsFromRelation`,
+  `includeRowOwner`, `sound`, `badge`, `dataOnly`), and with the rule that the
+  last segment of `recipientsFromRelation` must be a people column.
+- The action `type` field of `create_automation` was described as a column
+  type.
+
+Needs a backend with relation row-level security, `/apps/:appId/invites` and
+`/apps/:appId/users/:userId/links`.
+
+## 0.15.0, 2026-09-23
+
+`rowLevelSecurity` keeps its `mode` (`owner`, `shared`, `phone`) and
+`phoneColumn`, and `update_app_endpoint` can set it. Before, the schema had no
+`mode` and the unknown key was dropped, so every endpoint asked to be "shared"
+was stored as "owner".
+
 ## 0.14.5, 2026-09-16
 
 A hosted site can be read back and reused, not only rolled back.

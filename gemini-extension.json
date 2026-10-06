@@ -1,6 +1,6 @@
 {
   "name": "tasklite",
-  "version": "0.14.0",
+  "version": "0.16.0",
   "description": "TaskLite (tasklite.net) over MCP, a hosted backend and admin for apps you build with Gemini CLI: typed tables, relations, data, automations, a REST API and an admin the business itself operates.",
   "mcpServers": {
     "tasklite": {
