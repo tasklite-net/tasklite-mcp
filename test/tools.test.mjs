@@ -486,6 +486,8 @@ test('tools/list: the new tools are there, annotated, and the schema shows relat
       'identityPhoneColumn',
       'identityEmailColumn',
       'allowInvites',
+      'singleLink',
+      'editOwnOnly',
       'emailColumn',
     ]) {
       assert.ok(text.includes(`"${key}"`), `${name} schema names ${key}`);

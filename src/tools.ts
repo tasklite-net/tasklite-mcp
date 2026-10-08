@@ -646,6 +646,10 @@ const RLS_FIELDS = {
     'mode "relation" only, optional: like identityPhoneColumn, for an email column and a user whose email was verified by a login code',
   allowInvites:
     'mode "relation" only, default false: true lets a user of the app mint an invite code for a row they reach through this endpoint (POST /apps/{appSlug}/api/{endpointSlug}/{itemId}/invites with body { maxUses?, expiresInDays?, label? }; the endpoint must also allow POST). A coach invites a trainee to the trainee\'s own row; whoever signs up with the code is linked to that row. Such an invite never grants an access role. Without it only an owner or admin creates invites (create_app_invite)',
+  singleLink:
+    'mode "relation" only, default false: true gives each row of this endpoint\'s board to ONE linked user. Once someone is linked to a row, another person redeeming an invite code for the same row is refused (the sign-up answers inviteRedeemed: false with inviteError "INVITE_ROW_TAKEN"), so a coach cannot become a trainee\'s row from a second account. Whoever is already linked is not affected, and the app owner can still link by hand (link_app_user). Set it on the endpoint of the board whose rows are invited to, e.g. Trainees',
+  editOwnOnly:
+    'mode "relation" only, default false: true lets everyone the relation reaches READ a row, while only the user who created it may PATCH or DELETE it, or change its files (others get 403 with code ROW_NOT_YOURS). For rows two people both see but only one of them owns, e.g. a trainee\'s own log that her coach reads',
 } as const;
 
 export const RLS_SCHEMA = z
@@ -690,6 +694,8 @@ export const RLS_SCHEMA = z
         `${RLS_FIELDS.identityEmailColumn}. A column id (get_board_schema of that board)`,
       ),
     allowInvites: z.boolean().optional().describe(RLS_FIELDS.allowInvites),
+    singleLink: z.boolean().optional().describe(RLS_FIELDS.singleLink),
+    editOwnOnly: z.boolean().optional().describe(RLS_FIELDS.editOwnOnly),
   })
   .strict();
 
@@ -739,6 +745,8 @@ export const BUILD_RLS_SCHEMA = z
         `${RLS_FIELDS.identityEmailColumn}. The NAME of a column of that board in the spec`,
       ),
     allowInvites: z.boolean().optional().describe(RLS_FIELDS.allowInvites),
+    singleLink: z.boolean().optional().describe(RLS_FIELDS.singleLink),
+    editOwnOnly: z.boolean().optional().describe(RLS_FIELDS.editOwnOnly),
   })
   .strict();
 
@@ -794,6 +802,8 @@ export function planBuildRls(
     "identityPhoneColumn",
     "identityEmailColumn",
     "allowInvites",
+    "singleLink",
+    "editOwnOnly",
   ] as const;
   if (mode !== "relation") {
     const stray = relationOnly.filter((k) => rls[k] !== undefined);
@@ -3715,8 +3725,13 @@ export function registerTools(
               }
               out[k] = id;
             }
-            if (spec.allowInvites !== undefined)
-              out.allowInvites = spec.allowInvites;
+            for (const k of [
+              "allowInvites",
+              "singleLink",
+              "editOwnOnly",
+            ] as const) {
+              if (spec[k] !== undefined) out[k] = spec[k];
+            }
             return out;
           };
           let anyRls = false;
