@@ -97,6 +97,25 @@ test('RLS_SCHEMA: an unknown mode is refused', () => {
   assert.equal(RLS_SCHEMA.safeParse({ enabled: true, mode: 'team' }).success, false);
 });
 
+const TOKEN_ALL = {
+  enabled: true,
+  mode: 'token',
+  tokenColumn: 'col-token',
+  accessColumn: 'col-access',
+  inviteesColumn: 'col-invitees',
+  phoneColumn: 'col-owner-phone',
+};
+
+test('RLS_SCHEMA: token mode (share links) round-trips with every field', () => {
+  assert.deepEqual(RLS_SCHEMA.parse(TOKEN_ALL), TOKEN_ALL);
+  const linkOnly = { enabled: true, mode: 'token', tokenColumn: 'col-token' };
+  assert.deepEqual(RLS_SCHEMA.parse(linkOnly), linkOnly);
+});
+
+test('BUILD_RLS_SCHEMA: build_backend makes no share links', () => {
+  assert.equal(BUILD_RLS_SCHEMA.safeParse({ mode: 'token', tokenColumn: 'Secret' }).success, false);
+});
+
 test('BUILD_RLS_SCHEMA: every field round-trips and unknown keys are refused', () => {
   const { enabled: _enabled, ...byName } = RELATION_ALL;
   assert.deepEqual(BUILD_RLS_SCHEMA.parse(byName), byName);
@@ -120,6 +139,23 @@ test('create_app_endpoint sends relation row-level security unchanged', async ()
   assert.equal(calls[0].method, 'POST');
   assert.equal(calls[0].path, `/organizations/${ORG}/apps/app-1/endpoints`);
   assert.deepEqual(calls[0].body.rowLevelSecurity, RELATION_ALL);
+});
+
+test('create_app_endpoint sends a share link endpoint (mode token) unchanged', async () => {
+  const { calls, call } = await harness();
+  const res = await call('create_app_endpoint', {
+    appId: 'app-1',
+    boardId: 'board-1',
+    slug: 'shared',
+    name: 'Shared',
+    allowedMethods: ['GET'],
+    exposedColumns: [{ columnId: 'col-content', alias: 'content', readOnly: true }],
+    rowLevelSecurity: TOKEN_ALL,
+  });
+  assert.equal(res.isError, false, res.text);
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0].body.rowLevelSecurity, TOKEN_ALL);
+  assert.deepEqual(calls[0].body.allowedMethods, ['GET']);
 });
 
 test('create_app_endpoint refuses an unknown row-level security key before any request', async () => {
