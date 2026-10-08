@@ -631,9 +631,20 @@ const ANNOTATIONS: Record<string, Record<string, unknown>> = {
 const RLS_MODE_DESCRIPTION =
   '"owner" (default): each user sees and edits only the rows they created. "shared": every user authorized on the app (listed on it, or an owner/admin of the organization) sees and edits every row; the mode for an admin screen or a team system. "phone": a user signed in with a code sent to their phone sees and edits only the rows whose phoneColumn holds that phone, e.g. a directory where each person keeps their own card, or the Coaches board itself in a coaching app (each coach reads and edits his own row; a POST writes his verified phone into the row whatever the body says). "relation": each user reaches the rows whose relationColumn points at the row that stands for them, e.g. a Trainees board whose "Coach" relation column points at the Coaches board: a coach sees only his trainees. A relation endpoint never returns the row that IS the user, only rows pointing at it, so expose the identity board itself through a second endpoint in mode "phone". In relation mode a new row is linked to the caller by the server, the link cannot be moved with PATCH, and a user who stands for no row gets an empty list on GET and 403 on POST';
 
+// Only create_app_endpoint and update_app_endpoint take it: build_backend
+// makes read-write endpoints, and a share link only reads.
+const TOKEN_MODE_DESCRIPTION =
+  '"token": a share link. A row is read by whoever sends the secret written in its tokenColumn (header X-Share-Token), signed in or not, and by nobody without it: one row, no list, no stream, no write (allowedMethods must be ["GET"], and tokenColumn, approvedPhonesColumn and phoneColumn must not be exposed). Anonymous visitors read it through the hosted site, https://<slug>.tasklite.dev/api/<endpoint>. With accessColumn, a row whose access cell is not exactly "link" opens only for a user signed in with a verified phone written in approvedPhonesColumn or phoneColumn (401 to sign in, 403 for another phone). The secret is written by your server: 16 random bytes or more, base64url';
+
 const RLS_FIELDS = {
   phoneColumn:
-    'mode "phone" only, required there: the column that holds each row\'s phone number',
+    'mode "phone": required, the column that holds each row\'s phone number. Mode "token": optional, the row owner\'s phone, who opens an approved-only row without being listed',
+  tokenColumn:
+    'mode "token" only, required there: the column that holds each row\'s secret (at least 22 characters of A-Z, a-z, 0-9, - and _). Never exposed by the endpoint',
+  accessColumn:
+    'mode "token" only, optional: who may open each row. Exactly "link": anyone with the secret. Anything else, empty included: only the phone numbers in approvedPhonesColumn and phoneColumn. Without it every row is open to anyone with its secret',
+  approvedPhonesColumn:
+    'mode "token" only, optional, needs accessColumn: the phone numbers approved to view a row, one per line (or separated by commas or semicolons), in a text cell. Taking a number off closes the row to it at once',
   emailColumn:
     'mode "phone" only, optional, next to phoneColumn: a column that holds each row\'s email. A user whose email was proved by a login code also reaches the rows that carry that address; for people whose number takes no SMS (outside Israel the code goes by email, which proves the email, not the phone)',
   relationColumn:
@@ -653,16 +664,28 @@ export const RLS_SCHEMA = z
     enabled: z
       .boolean()
       .describe(
-        "true: every request must carry a signed-in user (the token from sign-in, or the app key with X-App-User)",
+        'true: every request must carry a signed-in user (the token from sign-in, or the app key with X-App-User); in mode "token", the row\'s secret instead',
       ),
     mode: z
-      .enum(["owner", "shared", "phone", "relation"])
+      .enum(["owner", "shared", "phone", "relation", "token"])
       .optional()
-      .describe(RLS_MODE_DESCRIPTION),
+      .describe(`${RLS_MODE_DESCRIPTION}. ${TOKEN_MODE_DESCRIPTION}`),
     phoneColumn: z
       .string()
       .optional()
       .describe(`${RLS_FIELDS.phoneColumn}. A column id (get_board_schema)`),
+    tokenColumn: z
+      .string()
+      .optional()
+      .describe(`${RLS_FIELDS.tokenColumn}. A column id (get_board_schema)`),
+    accessColumn: z
+      .string()
+      .optional()
+      .describe(`${RLS_FIELDS.accessColumn}. A column id (get_board_schema)`),
+    approvedPhonesColumn: z
+      .string()
+      .optional()
+      .describe(`${RLS_FIELDS.approvedPhonesColumn}. A column id (get_board_schema)`),
     emailColumn: z
       .string()
       .optional()
@@ -2521,7 +2544,7 @@ export function registerTools(
 
   tool(
     "create_app_endpoint",
-    "Expose a board as a REST endpoint of an app: /apps/{appSlug}/api/{slug}. exposedColumns limits which columns are readable/writable. rowLevelSecurity.enabled makes the endpoint per-user: the developer's server sends `X-App-User: <their user id>` next to the API key, and the endpoint returns, updates and deletes ONLY that user's rows (401 without the header). Use it whenever the app has its own users. rowLevelSecurity.mode chooses which rows a user reaches: owner (the rows they created), shared (all rows, for authorized users), phone (the rows that carry their verified phone) or relation (the rows linked through a relation column to the row that stands for them). An app with two kinds of people in one organization, coaches and their trainees, is built from these: the Coaches board in mode phone (phoneColumn = its phone column), so each coach reads and edits his own row; Trainees in mode relation with relationColumn = its Coach column and identityPhoneColumn = the Coaches phone column, so a coach who signed in by phone sees only his trainees; boards one hop further (weigh-ins of a trainee) in mode relation with relationColumn = the Trainee column and viaColumn = Trainees.Coach for the coach, plus a second endpoint on the same board without viaColumn for the trainee herself. A trainee becomes her row through an invite code (create_app_invite, or allowInvites so the coach mints it in the app) or link_app_user.",
+    "Expose a board as a REST endpoint of an app: /apps/{appSlug}/api/{slug}. exposedColumns limits which columns are readable/writable. rowLevelSecurity.enabled makes the endpoint per-user: the developer's server sends `X-App-User: <their user id>` next to the API key, and the endpoint returns, updates and deletes ONLY that user's rows (401 without the header). Use it whenever the app has its own users. rowLevelSecurity.mode chooses which rows a user reaches: owner (the rows they created), shared (all rows, for authorized users), phone (the rows that carry their verified phone), relation (the rows linked through a relation column to the row that stands for them) or token (a share link: only the row whose secret the caller sends in X-Share-Token, read only, signed in or not; with accessColumn, a row can be open only to approved phone numbers). An app with two kinds of people in one organization, coaches and their trainees, is built from these: the Coaches board in mode phone (phoneColumn = its phone column), so each coach reads and edits his own row; Trainees in mode relation with relationColumn = its Coach column and identityPhoneColumn = the Coaches phone column, so a coach who signed in by phone sees only his trainees; boards one hop further (weigh-ins of a trainee) in mode relation with relationColumn = the Trainee column and viaColumn = Trainees.Coach for the coach, plus a second endpoint on the same board without viaColumn for the trainee herself. A trainee becomes her row through an invite code (create_app_invite, or allowInvites so the coach mints it in the app) or link_app_user.",
     {
       appId: z
         .string()

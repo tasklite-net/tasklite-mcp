@@ -65,7 +65,9 @@ return, update and delete only that user's rows. No user system to build.
 rowLevelSecurity.mode picks which rows a user reaches: owner (the rows they
 created, the default), shared (all rows, for authorized users), phone (rows
 carrying their verified phone), relation (rows linked through a relation
-column to the row that stands for them). An app with two kinds of people,
+column to the row that stands for them), token (a share link: only the row
+whose secret the caller sends in X-Share-Token, read only, optionally only
+for approved phone numbers). An app with two kinds of people,
 coaches and their trainees: Coaches in mode phone; Trainees in mode relation
 with relationColumn = its Coach column and identityPhoneColumn = the Coaches
 phone column; a board one hop further (weigh-ins) adds viaColumn. A user "is"
