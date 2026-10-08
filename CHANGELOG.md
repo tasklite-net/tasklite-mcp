@@ -3,6 +3,17 @@
 All notable changes to `@tasklite/mcp`. Versions that were never published
 are folded into the next published one, so the numbers on npm may skip.
 
+## 0.16.1, 2026-10-08
+
+### Added
+- `rowLevelSecurity.singleLink` and `rowLevelSecurity.editOwnOnly` on
+  `create_app_endpoint`, `update_app_endpoint` and the boards of
+  `build_backend`, for mode `relation`. `singleLink` gives each row to one
+  linked user: an invite code for a row that already has someone is refused
+  with `INVITE_ROW_TAKEN`. `editOwnOnly` lets everyone the relation reaches
+  read a row while only its creator changes or deletes it (`ROW_NOT_YOURS`).
+  The names are the server's own.
+
 ## 0.16.0, 2026-10-04
 
 An app with two kinds of users can be built through the connector.

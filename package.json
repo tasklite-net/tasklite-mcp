@@ -1,6 +1,6 @@
 {
   "name": "@tasklite/mcp",
-  "version": "0.16.0",
+  "version": "0.16.1",
   "description": "TaskLite MCP server: build a full backend (projects, boards, data, REST endpoints), deploy a frontend onto it, and get a ready-made admin, from Claude Code and other MCP clients",
   "license": "MIT",
   "homepage": "https://tasklite.net",
