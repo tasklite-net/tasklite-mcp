@@ -10,9 +10,9 @@ Share links can be set up through the connector.
 ### Added
 - `rowLevelSecurity.mode: "token"` on `create_app_endpoint` and
   `update_app_endpoint`, with `tokenColumn`, `accessColumn` and
-  `inviteesColumn`, and `phoneColumn` as the row owner's phone. A row is read
+  `approvedPhonesColumn`, and `phoneColumn` as the row owner's phone. A row is read
   by whoever sends its secret in `X-Share-Token`, signed in or not; with
-  `accessColumn`, a row can be open only to invited phones. Needs the server
+  `accessColumn`, a row can be open only to approved phone numbers. Needs the server
   that knows the mode (tastlite-be, "App API: share links"); an older server
   refuses it by name. `build_backend` does not take it: it makes read-write
   endpoints, and a share link only reads.

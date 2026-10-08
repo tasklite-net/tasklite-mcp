@@ -102,7 +102,7 @@ const TOKEN_ALL = {
   mode: 'token',
   tokenColumn: 'col-token',
   accessColumn: 'col-access',
-  inviteesColumn: 'col-invitees',
+  approvedPhonesColumn: 'col-approved-phones',
   phoneColumn: 'col-owner-phone',
 };
 
