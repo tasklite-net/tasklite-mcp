@@ -438,10 +438,108 @@ test('link tools call the user link routes', async () => {
   const base = `/organizations/${ORG}/apps/app-1/users`;
   assert.deepEqual(calls, [
     { method: 'GET', path: base, body: undefined },
+    { method: 'GET', path: `${base}/pending`, body: undefined },
     { method: 'POST', path: `${base}/user-1/links`, body: { itemId: 'item-1' } },
     { method: 'GET', path: `${base}/user-1/links`, body: undefined },
     { method: 'DELETE', path: `${base}/user-1/links/item-1`, body: undefined },
   ]);
+});
+
+// ── Access by phone ──────────────────────────────────────────────────────────
+
+test('add_app_user sends the phone and the role, and passes the answer through', async () => {
+  const { calls, call } = await harness(() => ({
+    status: 'pending',
+    phone: '+972548468601',
+    role: 'editor',
+    pendingId: 'p-1',
+    expiresAt: null,
+  }));
+  const res = await call('add_app_user', { appId: 'app-1', phone: '054-8468601', role: 'editor' });
+  assert.equal(res.isError, false, res.text);
+  assert.deepEqual(calls, [
+    {
+      method: 'POST',
+      path: `/organizations/${ORG}/apps/app-1/users`,
+      body: { phone: '054-8468601', role: 'editor' },
+    },
+  ]);
+  assert.equal(res.json.status, 'pending');
+  assert.equal(res.json.pendingId, 'p-1');
+});
+
+test('add_app_user leaves the role and the expiry to the server when not given', async () => {
+  const { calls, call } = await harness();
+  await call('add_app_user', { appId: 'app-1', phone: '+972548468601' });
+  assert.deepEqual(calls[0].body, { phone: '+972548468601' });
+  await call('add_app_user', { appId: 'app-1', phone: '+972548468601', expiresInDays: 7 });
+  assert.deepEqual(calls[1].body, { phone: '+972548468601', expiresInDays: 7 });
+});
+
+test('add_app_user refuses a role or an expiry the server would refuse', async () => {
+  const { calls, call } = await harness();
+  assert.equal((await call('add_app_user', { appId: 'app-1', phone: '0548468601', role: 'admin' })).isError, true);
+  assert.equal((await call('add_app_user', { appId: 'app-1', phone: '0548468601', expiresInDays: 0 })).isError, true);
+  assert.equal((await call('add_app_user', { appId: 'app-1' })).isError, true);
+  assert.equal(calls.length, 0);
+});
+
+test('list_app_users answers users and the phones still waiting', async () => {
+  const user = { userId: 'user-1', name: 'Dana', role: 'editor', isActive: true, hasAccessRow: false, phone: '+972545511985' };
+  const waiting = { id: 'p-1', phone: '+972548468601', role: 'editor', status: 'pending' };
+  const { call } = await harness((_m, path) => (path.endsWith('/pending') ? [waiting] : [user]));
+  const res = await call('list_app_users', { appId: 'app-1' });
+  assert.deepEqual(res.json, { users: [user], pending: [waiting] });
+});
+
+test('set_app_user_role patches only what was passed', async () => {
+  const { calls, call } = await harness();
+  const path = `/organizations/${ORG}/apps/app-1/users/user-1`;
+  await call('set_app_user_role', { appId: 'app-1', userId: 'user-1', role: 'viewer' });
+  await call('set_app_user_role', { appId: 'app-1', userId: 'user-1', isActive: false });
+  await call('set_app_user_role', { appId: 'app-1', userId: 'user-1', role: 'editor', isActive: true });
+  assert.deepEqual(calls, [
+    { method: 'PATCH', path, body: { role: 'viewer' } },
+    { method: 'PATCH', path, body: { isActive: false } },
+    { method: 'PATCH', path, body: { role: 'editor', isActive: true } },
+  ]);
+});
+
+test('set_app_user_role with nothing to change calls nothing', async () => {
+  const { calls, call } = await harness();
+  const res = await call('set_app_user_role', { appId: 'app-1', userId: 'user-1' });
+  assert.match(res.json.error, /role, isActive, or both/);
+  assert.equal((await call('set_app_user_role', { appId: 'app-1', userId: 'user-1', role: 'owner' })).isError, true);
+  assert.equal(calls.length, 0);
+});
+
+test('remove_app_user switches a user off, or cancels a waiting phone', async () => {
+  const { calls, call } = await harness();
+  const base = `/organizations/${ORG}/apps/app-1/users`;
+  await call('remove_app_user', { appId: 'app-1', userId: 'user-1' });
+  await call('remove_app_user', { appId: 'app-1', pendingId: 'p-1' });
+  assert.deepEqual(calls, [
+    { method: 'PATCH', path: `${base}/user-1`, body: { isActive: false } },
+    { method: 'DELETE', path: `${base}/pending/p-1`, body: undefined },
+  ]);
+});
+
+test('remove_app_user takes exactly one id', async () => {
+  const { calls, call } = await harness();
+  const none = await call('remove_app_user', { appId: 'app-1' });
+  const both = await call('remove_app_user', { appId: 'app-1', userId: 'user-1', pendingId: 'p-1' });
+  assert.match(none.json.error, /exactly one/);
+  assert.match(both.json.error, /exactly one/);
+  assert.equal(calls.length, 0);
+});
+
+test('a builder is told how the people who run an app get in', async () => {
+  const { instructions } = await import('../dist/instructions.js').then((m) => ({
+    instructions: Object.values(m).find((v) => typeof v === 'string' && v.includes('add_app_user')),
+  }));
+  assert.ok(instructions, 'the instructions mention add_app_user');
+  assert.match(instructions, /mode shared/);
+  assert.match(instructions, /before their first sign-in/);
 });
 
 // ── What a client is told ────────────────────────────────────────────────────
@@ -450,6 +548,9 @@ const NEW_TOOLS = [
   'delete_app_endpoint',
   'configure_app_settings',
   'list_app_users',
+  'add_app_user',
+  'set_app_user_role',
+  'remove_app_user',
   'create_app_invite',
   'list_app_invites',
   'revoke_app_invite',

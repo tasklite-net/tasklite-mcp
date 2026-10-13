@@ -3,6 +3,41 @@
 All notable changes to `@tasklite/mcp`. Versions that were never published
 are folded into the next published one, so the numbers on npm may skip.
 
+## 0.17.0, 2026-10-13
+
+Giving a person access to an app is one call: a phone number and a role.
+
+Until now nobody could be let into an app before they had signed in once and
+been refused: every way onto the access list needed a user id, and a phone
+has none before its first code. Builders worked around it in the page, or an
+operator ran a script after the first sign-in.
+
+### Added
+- `add_app_user`: phone and role. A phone that already signed in gets access
+  at once (`status: "active"`); any other gets it on its first sign-in with a
+  code (`status: "pending"`), with nothing else to do. Needs a server that has
+  `POST /organizations/:org/apps/:app/users`.
+- `set_app_user_role`: change the role of an existing user, switch them off
+  or back on, or put on the access list someone who signed in and is refused.
+  Wraps a route the server has had since 0.16.
+- `remove_app_user`: switch a user off, or cancel access a phone is still
+  waiting for.
+
+### Changed
+- `list_app_users` answers `{ users, pending }` instead of a bare array. Each
+  user carries `hasAccessRow` and `phone`; `pending` lists the phones still
+  waiting. A user with `hasAccessRow: false` was shown as an active editor and
+  was nonetheless refused by every `shared` endpoint.
+- The instructions carry the recipe for an admin screen: `shared` endpoints,
+  the API called directly with the user's token, and `add_app_user` for the
+  people who run it.
+
+### Fixed
+- The description of mode `shared` left out that an editor of the
+  organization gets in too.
+- `configure_external_access` said the registration policy governs every way
+  in. Sign-in by phone code obeys only `"invite"`.
+
 ## 0.16.1, 2026-10-08
 
 ### Added

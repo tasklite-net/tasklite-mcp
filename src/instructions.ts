@@ -73,6 +73,18 @@ a row by an invite code (create_app_invite, or allowInvites on the endpoint so
 a coach invites from inside the app), by link_app_user (ids from
 list_app_users), or by a verified phone or email written in the row.
 rowLevelSecurity is replaced whole on update and takes only the listed keys.
+
+An admin screen (the owner and staff manage the data behind a login): put its
+endpoints in mode shared, sign people in by phone code, and call the API at
+https://api.tasklite.net with Authorization: Bearer <the token from
+/auth/otp/verify>. Then give each person who runs the app access with
+add_app_user (their phone and a role). It works before their first sign-in:
+the access opens by itself when that phone verifies its first code. Without
+it a signed-in person gets 403 on every shared endpoint. Never build a
+workaround in the page (a phones board the page syncs from, an invite code
+typed by the owner). list_app_users shows who is on the list (hasAccessRow)
+and who is still waiting; set_app_user_role changes a role or switches a
+user off; remove_app_user takes access away.
 App-level settings (password reset return URLs, account deletion):
 configure_app_settings. Removing an endpoint: delete_app_endpoint.
 
