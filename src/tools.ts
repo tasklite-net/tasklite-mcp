@@ -573,7 +573,8 @@ const ANNOTATIONS: Record<string, Record<string, unknown>> = {
   set_app_user_role: {
     title: "Change an app user's role or switch them off",
     readOnlyHint: false,
-    destructiveHint: false,
+    // isActive false is the same switch-off remove_app_user sends.
+    destructiveHint: true,
     idempotentHint: true,
     openWorldHint: false,
   },
