@@ -3,7 +3,7 @@
 All notable changes to `@tasklite/mcp`. Versions that were never published
 are folded into the next published one, so the numbers on npm may skip.
 
-## 0.17.0, unreleased
+## 0.17.0, 2026-10-13
 
 Giving a person access to an app is one call: a phone number and a role.
 
