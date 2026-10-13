@@ -562,6 +562,29 @@ const ANNOTATIONS: Record<string, Record<string, unknown>> = {
     idempotentHint: true,
     openWorldHint: false,
   },
+  add_app_user: {
+    title: "Give a phone access to an app",
+    readOnlyHint: false,
+    destructiveHint: false,
+    // Asking again for the same phone only sets its role again.
+    idempotentHint: true,
+    openWorldHint: false,
+  },
+  set_app_user_role: {
+    title: "Change an app user's role or switch them off",
+    readOnlyHint: false,
+    destructiveHint: false,
+    idempotentHint: true,
+    openWorldHint: false,
+  },
+  remove_app_user: {
+    title: "Take a person's app access away",
+    readOnlyHint: false,
+    // Switches a user off, or cancels access a phone was still waiting for.
+    destructiveHint: true,
+    idempotentHint: true,
+    openWorldHint: false,
+  },
   create_app_invite: {
     title: "Create invite code",
     readOnlyHint: false,
@@ -629,7 +652,7 @@ const ANNOTATIONS: Record<string, Record<string, unknown>> = {
 // which field goes with which mode is checked by the server, whose message
 // names the field.
 const RLS_MODE_DESCRIPTION =
-  '"owner" (default): each user sees and edits only the rows they created. "shared": every user authorized on the app (listed on it, or an owner/admin of the organization) sees and edits every row; the mode for an admin screen or a team system. "phone": a user signed in with a code sent to their phone sees and edits only the rows whose phoneColumn holds that phone, e.g. a directory where each person keeps their own card, or the Coaches board itself in a coaching app (each coach reads and edits his own row; a POST writes his verified phone into the row whatever the body says). "relation": each user reaches the rows whose relationColumn points at the row that stands for them, e.g. a Trainees board whose "Coach" relation column points at the Coaches board: a coach sees only his trainees. A relation endpoint never returns the row that IS the user, only rows pointing at it, so expose the identity board itself through a second endpoint in mode "phone". In relation mode a new row is linked to the caller by the server, the link cannot be moved with PATCH, and a user who stands for no row gets an empty list on GET and 403 on POST';
+  '"owner" (default): each user sees and edits only the rows they created. "shared": every user authorized on the app (on its access list, or an owner, admin or editor of the organization) sees and edits every row; the mode for an admin screen or a team system. Anyone else who signs in is refused with 403, so put the people who run the app on the list with add_app_user (their phone and a role; it works before their first sign-in). "phone": a user signed in with a code sent to their phone sees and edits only the rows whose phoneColumn holds that phone, e.g. a directory where each person keeps their own card, or the Coaches board itself in a coaching app (each coach reads and edits his own row; a POST writes his verified phone into the row whatever the body says). "relation": each user reaches the rows whose relationColumn points at the row that stands for them, e.g. a Trainees board whose "Coach" relation column points at the Coaches board: a coach sees only his trainees. A relation endpoint never returns the row that IS the user, only rows pointing at it, so expose the identity board itself through a second endpoint in mode "phone". In relation mode a new row is linked to the caller by the server, the link cannot be moved with PATCH, and a user who stands for no row gets an empty list on GET and 403 on POST';
 
 const RLS_FIELDS = {
   phoneColumn:
@@ -1255,7 +1278,7 @@ export function registerTools(
 
   tool(
     "configure_external_access",
-    'Read or change how EXTERNAL users (people who sign up to your app through TaskLite auth) get into an organization. They have two ways in, and both obey the policy below: email and password (POST /auth/register-external with this organizationId, then POST /auth/login), or Google (POST /auth/google-external with a Google ID token and this organizationId). Either way the answer carries a token the app sends as Authorization: Bearer on every App API call. registrationPolicy: "open", in at once; "approval", an organization admin approves each signup (TaskLite mails the admins on every signup, and the person once approved; unapproved users are never billed); "invite", a new person gets in only with an invite code (create_app_invite, or a code a user of the app minted on a relation endpoint with allowInvites): the app sends it as inviteCode with POST /auth/otp/verify, /auth/register-external or /auth/google-external, a sign-up without one is refused with 403 INVITE_REQUIRED and a bad code with 403 INVITE_INVALID, while people who are already members keep signing in as before; "closed" (the default), self-signup refused, external users are created by an admin. Under every policy a valid invite code admits its holder as if the organization were open, so "invite" is the policy for an app where people join only through someone who invited them (a coach inviting trainees). appLoginUrl: the page of YOUR app where these users log in, it becomes the "Log in" button in the approval email, so set it whenever you deploy an app that uses this flow; pass "" to clear. Call with no changes to just read the current settings. Requires organization admin.',
+    'Read or change how EXTERNAL users (people who sign up to your app through TaskLite auth) get into an organization. This policy governs sign-up by email and password and by Google. Sign-in by a phone code (POST /auth/otp/send, then /auth/otp/verify) obeys only "invite": under "closed", "approval" and "open" any phone that verifies a code becomes an external member of the organization, who reaches nothing until an endpoint\'s row-level security or the app\'s access list (add_app_user) gives them something; under "invite" a new phone needs an invite code or an add_app_user grant. The two ways in that obey the whole policy: email and password (POST /auth/register-external with this organizationId, then POST /auth/login), or Google (POST /auth/google-external with a Google ID token and this organizationId). Either way the answer carries a token the app sends as Authorization: Bearer on every App API call. registrationPolicy: "open", in at once; "approval", an organization admin approves each signup (TaskLite mails the admins on every signup, and the person once approved; unapproved users are never billed); "invite", a new person gets in only with an invite code (create_app_invite, or a code a user of the app minted on a relation endpoint with allowInvites): the app sends it as inviteCode with POST /auth/otp/verify, /auth/register-external or /auth/google-external, a sign-up without one is refused with 403 INVITE_REQUIRED and a bad code with 403 INVITE_INVALID, while people who are already members keep signing in as before; "closed" (the default), self-signup refused, external users are created by an admin. Under every policy a valid invite code admits its holder as if the organization were open, so "invite" is the policy for an app where people join only through someone who invited them (a coach inviting trainees). appLoginUrl: the page of YOUR app where these users log in, it becomes the "Log in" button in the approval email, so set it whenever you deploy an app that uses this flow; pass "" to clear. Call with no changes to just read the current settings. Requires organization admin.',
     {
       organizationId: z
         .string()
@@ -2783,7 +2806,7 @@ export function registerTools(
 
   tool(
     "list_app_users",
-    "List the end users of an app: everyone who ever called it with X-App-User or signed in to it with a code. Each has userId (the id link_app_user, list_app_user_links and send_test_push take), externalId (the developer's own id for them, or null for a user who signed in by code), name, source (api or otp), role (viewer, editor or submitter; editor when never set), isActive, lastSeenAt and itemCount (rows they own on the app's boards). Use it to find the userId of the person to link to a row.",
+    'List the people of an app, as { users, pending }. users: everyone who ever called it with X-App-User or signed in to it with a code. Each has userId (the id set_app_user_role, remove_app_user, link_app_user, list_app_user_links and send_test_push take), externalId (the developer\'s own id for them, or null for a user who signed in by code), name, phone (the phone they proved with a code, or null), source (api or otp), role (viewer, editor or submitter), isActive, hasAccessRow, lastSeenAt and itemCount (rows they own on the app\'s boards). hasAccessRow says whether they are on the app\'s access list: when it is false, role and isActive are only defaults, and an endpoint in row-level security mode "shared" refuses them with 403 until add_app_user or set_app_user_role puts them on the list. pending: the phones add_app_user is still holding access for, each with id, phone, role, createdAt, expiresAt and status (pending, or expired); they get in on their first sign-in with a code. Use it to see who can use the app and to find the userId of a person.',
     {
       appId: z
         .string()
@@ -2797,11 +2820,146 @@ export function registerTools(
     },
     async ({ appId, organizationId }) => {
       const orgId = await resolveOrg(organizationId);
+      const base = `/organizations/${orgId}/apps/${appId}/users`;
+      const [users, pending] = await Promise.all([
+        getApi().request("GET", base),
+        getApi().request("GET", `${base}/pending`),
+      ]);
+      return ok({ users, pending });
+    },
+  );
+
+  tool(
+    "add_app_user",
+    'Give a person access to an app by their phone number: the phone and a role, nothing else. This is how the people who run an app (the business owner, a manager, staff) get into its admin screen, whose endpoints are in row-level security mode "shared". The person needs no invite code and does not have to sign in first. If the phone already signed in to this organization with a code, access is on at once and the answer has status "active" and their userId. Otherwise the answer has status "pending" and a pendingId: nothing is created for the number yet, and the access opens by itself the first time that phone signs in to the app with an SMS code (POST /auth/otp/send, then /auth/otp/verify). The phone is matched whatever its spelling: 054-1234567, +972 54 123 4567 and 972541234567 are one number; a number outside Israel needs its country code. Calling again for the same phone sets its role again, and switches back on a user who was switched off. Roles: editor (reads and writes), viewer (reads), submitter (creates). The app must still sign people in by phone code; a person who signs in another way (email and password, Google) is a different account, give them access with set_app_user_role after their first sign-in. Requires organization owner or admin (an editor gets 403).',
+    {
+      appId: z
+        .string()
+        .describe("App id or slug (from list_apps / create_app)"),
+      phone: z
+        .string()
+        .describe(
+          'The phone number, e.g. "0541234567" or "+972541234567"; any spelling of an Israeli mobile, or any other number with its country code',
+        ),
+      role: z
+        .enum(["viewer", "editor", "submitter"])
+        .optional()
+        .describe(
+          "App-level access role: editor (reads and writes; the default), viewer (reads), submitter (creates)",
+        ),
+      expiresInDays: z
+        .number()
+        .int()
+        .min(1)
+        .max(365)
+        .optional()
+        .describe(
+          "For a phone that has not signed in yet: days the waiting access stays valid (1-365). Omit and it waits with no time limit, which is the normal choice",
+        ),
+      organizationId: z
+        .string()
+        .optional()
+        .describe(
+          "Organization id; defaults to the credential organization when omitted",
+        ),
+    },
+    async ({ appId, phone, role, expiresInDays, organizationId }) => {
+      const orgId = await resolveOrg(organizationId);
+      const body: Record<string, unknown> = { phone };
+      if (role !== undefined) body.role = role;
+      if (expiresInDays !== undefined) body.expiresInDays = expiresInDays;
       return ok(
         await getApi().request(
-          "GET",
+          "POST",
           `/organizations/${orgId}/apps/${appId}/users`,
+          body,
         ),
+      );
+    },
+  );
+
+  tool(
+    "set_app_user_role",
+    'Change what an existing user of an app may do, or switch them off or back on. Takes the userId from list_app_users and at least one of role and isActive. It also puts on the app\'s access list a user who is not on it yet (hasAccessRow false in list_app_users), which is what an endpoint in row-level security mode "shared" checks: use it for someone who already signed in and is refused with 403. isActive false switches the user off in every mode: their calls are refused until it is set back to true; nothing of theirs is deleted. For a person who has not signed in yet there is no userId: use add_app_user with their phone. Requires organization owner or admin (an editor gets 403).',
+    {
+      appId: z
+        .string()
+        .describe("App id or slug (from list_apps / create_app)"),
+      userId: z
+        .string()
+        .describe("The user's id (userId from list_app_users), a UUID; not their externalId"),
+      role: z
+        .enum(["viewer", "editor", "submitter"])
+        .optional()
+        .describe(
+          "App-level access role: editor (reads and writes), viewer (reads), submitter (creates). Omit to keep the current one",
+        ),
+      isActive: z
+        .boolean()
+        .optional()
+        .describe(
+          "false switches the user off, true switches them back on. Omit to keep the current state",
+        ),
+      organizationId: z
+        .string()
+        .optional()
+        .describe(
+          "Organization id; defaults to the credential organization when omitted",
+        ),
+    },
+    async ({ appId, userId, role, isActive, organizationId }) => {
+      if (role === undefined && isActive === undefined) {
+        return ok({ error: "Pass role, isActive, or both: there is nothing to change otherwise." });
+      }
+      const orgId = await resolveOrg(organizationId);
+      const body: Record<string, unknown> = {};
+      if (role !== undefined) body.role = role;
+      if (isActive !== undefined) body.isActive = isActive;
+      return ok(
+        await getApi().request(
+          "PATCH",
+          `/organizations/${orgId}/apps/${appId}/users/${userId}`,
+          body,
+        ),
+      );
+    },
+  );
+
+  tool(
+    "remove_app_user",
+    "Take a person's access to an app away. Pass exactly one of two ids from list_app_users: userId, for someone who already signed in, switches them off (the same as set_app_user_role with isActive false: their calls are refused in every mode, nothing of theirs is deleted, and set_app_user_role or add_app_user switches them back on); pendingId, for a phone that add_app_user is still holding access for, cancels it, so that phone's first sign-in opens nothing. Requires organization owner or admin (an editor gets 403).",
+    {
+      appId: z
+        .string()
+        .describe("App id or slug (from list_apps / create_app)"),
+      userId: z
+        .string()
+        .optional()
+        .describe("The user's id (userId from list_app_users), a UUID. Pass this or pendingId"),
+      pendingId: z
+        .string()
+        .optional()
+        .describe(
+          "Id of a waiting phone (id in the pending list of list_app_users, or pendingId from add_app_user), a UUID. Pass this or userId",
+        ),
+      organizationId: z
+        .string()
+        .optional()
+        .describe(
+          "Organization id; defaults to the credential organization when omitted",
+        ),
+    },
+    async ({ appId, userId, pendingId, organizationId }) => {
+      if ((userId === undefined) === (pendingId === undefined)) {
+        return ok({ error: "Pass exactly one of userId and pendingId." });
+      }
+      const orgId = await resolveOrg(organizationId);
+      const base = `/organizations/${orgId}/apps/${appId}/users`;
+      if (pendingId !== undefined) {
+        return ok(await getApi().request("DELETE", `${base}/pending/${pendingId}`));
+      }
+      return ok(
+        await getApi().request("PATCH", `${base}/${userId}`, { isActive: false }),
       );
     },
   );
