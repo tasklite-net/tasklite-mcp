@@ -88,6 +88,8 @@ export function sanitizeUsersDeep(value: unknown): unknown {
  * it. Returns null when the pairing is fine.
  */
 const NOTES_RE = /(note|notes|comment|remark|memo|הערה|הערות|תיאור)/i;
+/** Column names that announce "this is the board's status". Shared by the type hints and the status-dropdown objection. */
+const STATUS_NAME_RE = /(^|[\s_/(-])(status|סטטוס|מצב)($|[\s_/)-])/i;
 const TYPE_HINTS: Array<{ re: RegExp; suggest: string }> = [
   {
     re: /(^|[\s_/(-])(date|deadline|due|תאריך|מועד)($|[\s_/)-])/i,
@@ -111,7 +113,7 @@ const TYPE_HINTS: Array<{ re: RegExp; suggest: string }> = [
     re: /(^|[\s_/(-])(rating|score|דירוג|ציון)($|[\s_/)-])/i,
     suggest: "rating",
   },
-  { re: /(^|[\s_/(-])(status|סטטוס|מצב)($|[\s_/)-])/i, suggest: "status" },
+  { re: STATUS_NAME_RE, suggest: "status" },
   { re: /(^|[\s_/(-])(url|link|קישור)($|[\s_/)-])/i, suggest: "link" },
 ];
 
@@ -131,6 +133,13 @@ function columnTypeObjection(
       };
     }
   }
+  if (type === "dropdown" && STATUS_NAME_RE.test(name)) {
+    return {
+      rejected: `column "${name}" typed dropdown, but the name says it is the board's status. A status column must be type "status": it powers the status filters (status / excludeStatus), sorting and the board's status features, and a dropdown with this name is not seen as the board's status.`,
+      suggestedType: "status",
+      retry: `Call create_column again with type:"status" and the same settings.options, or force:true if this dropdown is not the board's status.`,
+    };
+  }
   if (
     (type === "dropdown" || type === "status") &&
     !(settings as any)?.options?.length
@@ -142,6 +151,125 @@ function columnTypeObjection(
     };
   }
   return null;
+}
+
+/** The column list out of a GET .../columns answer, whatever envelope it came in. */
+function columnsOf(res: any): any[] {
+  if (Array.isArray(res)) return res;
+  return res?.items ?? res?.data ?? res?.columns ?? [];
+}
+
+/**
+ * Where "status" lives on a board, from its columns. The backend resolves the
+ * status / excludeStatus filters against a column of type "status" only.
+ * "dropdown" is a dropdown named like a status (the common mistake: a status
+ * built as a dropdown called "סטטוס"), which the backend filter does not see.
+ */
+function statusColumnKind(
+  columns: any[],
+): { kind: "status" } | { kind: "dropdown"; column: any } | { kind: "none" } {
+  if (columns.some((c) => c?.type === "status")) return { kind: "status" };
+  const column = columns.find(
+    (c) => c?.type === "dropdown" && STATUS_NAME_RE.test(String(c?.name ?? "")),
+  );
+  return column ? { kind: "dropdown", column } : { kind: "none" };
+}
+
+/** A cell's stored value as a plain string: { value } or { label } wrappers, or a bare scalar. */
+function cellText(raw: unknown): string {
+  const v =
+    raw && typeof raw === "object" && !Array.isArray(raw)
+      ? ((raw as any).value ?? (raw as any).label)
+      : raw;
+  return v === null || v === undefined || typeof v === "object"
+    ? ""
+    : String(v).trim();
+}
+
+/** The cell of an item for one column, from the admin shape (cells: [{columnId, value}]) or a map keyed by column id. */
+function itemCellValue(item: any, columnId: string): unknown {
+  const cells = item?.cells;
+  if (Array.isArray(cells)) {
+    return cells.find((c: any) => (c?.columnId ?? c?.column?.id) === columnId)
+      ?.value;
+  }
+  return cells && typeof cells === "object" ? cells[columnId] : undefined;
+}
+
+/**
+ * The same matching the backend does for a status column: each comma separated
+ * token is resolved against the column's options by value or label,
+ * case-insensitive. A token that matches no option is kept as written. Both
+ * the option's value and its label are accepted, because a cell may hold
+ * either.
+ */
+function statusWanted(raw: string, column: any): Set<string> {
+  const options: Array<{ value?: unknown; label?: unknown } | string> =
+    column?.settings?.options ?? [];
+  const wanted = new Set<string>();
+  for (const part of raw.split(",")) {
+    const token = part.trim().toLowerCase();
+    if (!token) continue;
+    wanted.add(token);
+    for (const o of options) {
+      const value = String(
+        typeof o === "string" ? o : (o?.value ?? ""),
+      ).toLowerCase();
+      const label = String(
+        typeof o === "string" ? o : (o?.label ?? ""),
+      ).toLowerCase();
+      if (value === token || label === token) {
+        if (value) wanted.add(value);
+        if (label) wanted.add(label);
+      }
+    }
+  }
+  return wanted;
+}
+
+/**
+ * create_item / update_item `status` writes the task status of the row. A data
+ * board has no task fields: its rows hide that field and nothing reads it, so
+ * the call would succeed and change nothing anyone can see. Refuse it, and
+ * point at the board's status column when it has one. Only called when
+ * `status` is given, so other calls cost no extra request. A board that
+ * cannot be read is not a reason to refuse.
+ */
+async function refuseStatusOnDataBoard(
+  api: TaskLiteApi,
+  projectId: string,
+  boardId: string,
+): Promise<void> {
+  let board: any;
+  try {
+    board = await api.request<any>(
+      "GET",
+      `/projects/${projectId}/boards/${boardId}`,
+    );
+  } catch {
+    return;
+  }
+  if (board?.metadata?.kind !== "data") return;
+  let where = "";
+  try {
+    const cols = columnsOf(
+      await api.request("GET", `/projects/${projectId}/boards/${boardId}/columns`),
+    );
+    const kind = statusColumnKind(cols);
+    const column =
+      kind.kind === "status"
+        ? cols.find((c) => c?.type === "status")
+        : kind.kind === "dropdown"
+          ? kind.column
+          : null;
+    if (column)
+      where = ` This board's status column is "${column.name}" (id ${column.id}); set it with cells: { "${column.id}": "<option>" } or set_cell.`;
+  } catch {
+    // Without the columns the message still says what to do.
+  }
+  throw new Error(
+    `This is a data board: it has no task status, so the status field would be saved on a hidden task field that nothing shows or filters on. Set the status through the board's status column with cells (create_item) or set_cell (update_item).${where} Nothing was changed.`,
+  );
 }
 
 /**
@@ -1791,13 +1919,13 @@ export function registerTools(
         .string()
         .optional()
         .describe(
-          'Only rows whose status is one of these, comma separated. Matched against the board\'s status column by option value or label, case-insensitive: "todo,in_progress" on a task board, "Received,In Repair" on a data board whose status column lists those (get_board_schema shows the options)',
+          'Only rows whose status is one of these, comma separated. Matched against the board\'s status column by option value or label, case-insensitive: "todo,in_progress" on a task board, "Received,In Repair" on a data board whose status column lists those (get_board_schema shows the options). Needs a status column. A board with none (no column of type status) gets an error that lists its dropdown columns, instead of unfiltered rows. A board whose status is a dropdown named status/סטטוס/מצב is filtered here on that dropdown, after fetching, so an explicit limit can give a page with fewer rows (the answer says so)',
         ),
       excludeStatus: z
         .string()
         .optional()
         .describe(
-          'Only rows whose status is NOT one of these, comma separated, resolved like status. The way to ask for everything that is not done: excludeStatus "done" (task board) or "Completed" (a data board with that option). Rows with no status at all are kept',
+          'Only rows whose status is NOT one of these, comma separated, resolved like status. The way to ask for everything that is not done: excludeStatus "done" (task board) or "Completed" (a data board with that option). Rows with no status at all are kept. A board without a status column is handled as for status: an error, or a filter here on a dropdown named status/סטטוס/מצב',
         ),
       priority: z
         .string()
@@ -1854,8 +1982,86 @@ export function registerTools(
     }) => {
       const base = `/projects/${projectId}/boards/${boardId}/items`;
       const filters = new URLSearchParams();
+      // A row of a data board is a record, not a task: the App API already
+      // omits the built-in task fields for those boards, and this tool now
+      // matches it instead of returning status, priority and the rest of the
+      // task machinery on a customer or an invoice.
+      let plain = false;
+      let board: any = null;
+      try {
+        board = await getApi().request<any>(
+          "GET",
+          `/projects/${projectId}/boards/${boardId}`,
+        );
+        plain = board?.metadata?.kind === "data";
+      } catch {
+        // Cannot read the board: return the rows unchanged rather than fail.
+      }
+      // "status" means the board's status column, and the backend finds that
+      // among the columns of type status only. On a board without one the
+      // filter would quietly hit a hidden task field and return every row (or
+      // none), so look at the columns first, but only when a status filter or
+      // a status sort is asked for: from the board answer when it carries
+      // them, else with one extra request.
+      const sortsByStatus = sort ? sort.replace(/^-/, "") === "status" : false;
+      let boardColumns: any[] | null = null;
+      if (status || excludeStatus || sortsByStatus) {
+        if (Array.isArray(board?.columns) && board.columns.length) {
+          boardColumns = board.columns;
+        } else {
+          try {
+            boardColumns = columnsOf(
+              await getApi().request(
+                "GET",
+                `/projects/${projectId}/boards/${boardId}/columns`,
+              ),
+            );
+          } catch {
+            // Cannot read the columns: leave the filter to the server as before.
+          }
+        }
+      }
+      const statusKind = boardColumns ? statusColumnKind(boardColumns) : null;
+      if (statusKind?.kind === "none") {
+        const dropdowns = boardColumns!
+          .filter((c) => c?.type === "dropdown")
+          .map((c) => `"${c.name}" (id ${c.id})`);
+        throw new Error(
+          `This board has no status column, so the ${
+            status || excludeStatus ? "status filter" : "status sort"
+          } would not act on anything real. A status column is a column of type "status" (create_column with type:"status" and settings.options). ` +
+            (dropdowns.length
+              ? `Dropdown columns on this board: ${dropdowns.join(", ")}. Query without status and filter the rows yourself, or use search.`
+              : "This board has no dropdown columns either.") +
+            " Nothing was fetched.",
+        );
+      }
+      // A dropdown standing in for the status: the backend filters real status
+      // columns only (today it reads a hidden task field), so the rows are
+      // filtered here on that dropdown's cell. excludeStatus still goes to the
+      // server, where it is harmless; status does not, because a server that
+      // cannot see the column answers it with no rows at all.
+      const dropdownStatus =
+        statusKind?.kind === "dropdown" && (status || excludeStatus)
+          ? statusKind.column
+          : null;
+      const keepStatus = (row: unknown): boolean => {
+        if (!dropdownStatus) return true;
+        const have = cellText(
+          itemCellValue(row, dropdownStatus.id),
+        ).toLowerCase();
+        if (status && !statusWanted(status, dropdownStatus).has(have))
+          return false;
+        if (
+          excludeStatus &&
+          have &&
+          statusWanted(excludeStatus, dropdownStatus).has(have)
+        )
+          return false;
+        return true;
+      };
       if (search) filters.set("search", search);
-      if (status) filters.set("status", status);
+      if (status && !dropdownStatus) filters.set("status", status);
       if (excludeStatus) filters.set("excludeStatus", excludeStatus);
       if (priority) filters.set("priority", priority);
       if (archived) filters.set("archiveFilter", archived);
@@ -1865,20 +2071,6 @@ export function registerTools(
         filters.set("sortDirection", desc ? "DESC" : "ASC");
       }
       const extra = filters.toString();
-      // A row of a data board is a record, not a task: the App API already
-      // omits the built-in task fields for those boards, and this tool now
-      // matches it instead of returning status, priority and the rest of the
-      // task machinery on a customer or an invoice.
-      let plain = false;
-      try {
-        const board = await getApi().request<any>(
-          "GET",
-          `/projects/${projectId}/boards/${boardId}`,
-        );
-        plain = board?.metadata?.kind === "data";
-      } catch {
-        // Cannot read the board: return the rows unchanged rather than fail.
-      }
       const TASK_FIELDS = [
         "status",
         "priority",
@@ -1921,7 +2113,17 @@ export function registerTools(
         const qs = new URLSearchParams({ limit: String(limit) });
         if (page) qs.set("page", String(page));
         const url = `${base}?${qs.toString()}${extra ? `&${extra}` : ""}`;
-        return ok(stripAll(await getApi().request("GET", url)));
+        const res = await getApi().request("GET", url);
+        if (!dropdownStatus) return ok(stripAll(res));
+        const note = `The status filter was applied here, on the "${dropdownStatus.name}" dropdown, after the page was fetched (this board has no column of type status). This page can hold fewer than ${limit} rows, and meta counts the unfiltered query. Keep paging until a page comes back empty.`;
+        const holder: Record<string, unknown> = Array.isArray(res)
+          ? { items: res }
+          : { ...(res as Record<string, unknown>) };
+        const key = !Array.isArray(holder.items) && Array.isArray(holder.data)
+          ? "data"
+          : "items";
+        holder[key] = ((holder[key] as unknown[]) ?? []).filter(keepStatus);
+        return ok(stripAll({ ...holder, note }));
       }
       // No explicit paging: fetch everything in 200-item pages and concatenate.
       const all: unknown[] = [];
@@ -1935,7 +2137,7 @@ export function registerTools(
           : ((res as { items?: unknown[]; data?: unknown[] })?.items ??
             (res as { data?: unknown[] })?.data ??
             []);
-        all.push(...batch);
+        all.push(...batch.filter(keepStatus));
         if (batch.length < 200) break;
       }
       return ok(plain ? all.map(strip) : all);
@@ -1958,7 +2160,7 @@ export function registerTools(
         .string()
         .optional()
         .describe(
-          "Status value (todo, in_progress, done, or a value from the board's status options)",
+          "Task status of the row on a task board: todo, in_progress, review or done. Refused on a data board, where it would only write a hidden task field: set that board's status column with cells (create_item) or set_cell (update_item) instead",
         ),
       priority: z
         .string()
@@ -1976,19 +2178,22 @@ export function registerTools(
           'Cell values keyed by column id: { "<columnId>": value }. Scalars, { amount, currency } for currency, { relatedItemIds: [...] } for relations',
         ),
     },
-    async ({ projectId, boardId, ...body }) =>
-      ok(
+    async ({ projectId, boardId, ...body }) => {
+      if (body.status)
+        await refuseStatusOnDataBoard(getApi(), projectId, boardId);
+      return ok(
         await getApi().request(
           "POST",
           `/projects/${projectId}/boards/${boardId}/items`,
           body,
         ),
-      ),
+      );
+    },
   );
 
   tool(
     "update_item",
-    "Update item fields (title, description, status, priority, dueDate, tags).",
+    "Update item fields (title, description, status, priority, dueDate, tags). On a data board the task fields (status, priority, dueDate, tags) are hidden: its columns, status included, are set with set_cell.",
     {
       projectId: z
         .string()
@@ -2006,7 +2211,7 @@ export function registerTools(
         .string()
         .optional()
         .describe(
-          "Status value (todo, in_progress, done, or a value from the board's status options)",
+          "Task status of the row on a task board: todo, in_progress, review or done. Refused on a data board, where it would only write a hidden task field: set that board's status column with cells (create_item) or set_cell (update_item) instead",
         ),
       priority: z
         .string()
@@ -2021,14 +2226,17 @@ export function registerTools(
         .optional()
         .describe("Tags as an array of strings"),
     },
-    async ({ projectId, boardId, itemId, ...body }) =>
-      ok(
+    async ({ projectId, boardId, itemId, ...body }) => {
+      if (body.status)
+        await refuseStatusOnDataBoard(getApi(), projectId, boardId);
+      return ok(
         await getApi().request(
           "PATCH",
           `/projects/${projectId}/boards/${boardId}/items/${itemId}`,
           body,
         ),
-      ),
+      );
+    },
   );
 
   tool(
