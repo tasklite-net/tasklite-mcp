@@ -3,7 +3,7 @@
 All notable changes to `@tasklite/mcp`. Versions that were never published
 are folded into the next published one, so the numbers on npm may skip.
 
-## Unreleased
+## 0.17.1, 2026-10-14
 
 A board's status can no longer be set up or filtered in a way that silently
 does nothing.
