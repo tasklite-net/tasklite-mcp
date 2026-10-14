@@ -622,3 +622,327 @@ test('create_automation describes the scheduled trigger and send_push as the eng
     assert.ok(all.includes(word), `mentions ${word}`);
   }
 });
+
+// ── Status columns: dropdowns named like a status, and the status filter ──────
+
+const STATUS_OPTIONS = [
+  { value: 'Received', label: 'Received' },
+  { value: 'in_repair', label: 'In Repair' },
+  { value: 'Completed', label: 'Completed' },
+];
+
+test('create_column rejects a dropdown named like a status, in English and Hebrew', async () => {
+  for (const name of ['Status', 'סטטוס', 'מצב', 'Repair Status']) {
+    const { calls, call } = await harness();
+    const res = await call('create_column', {
+      projectId: 'p1',
+      boardId: 'b1',
+      name,
+      type: 'dropdown',
+      settings: { options: ['A', 'B'] },
+    });
+    assert.equal(res.isError, false, res.text);
+    assert.equal(res.json.created, false, name);
+    assert.equal(res.json.suggestedType, 'status', name);
+    assert.match(res.json.rejected, /must be type "status"/, name);
+    assert.match(res.json.retry, /type:"status"/, name);
+    assert.match(res.json.retry, /force:true/, name);
+    assert.equal(calls.length, 0, 'nothing was created');
+  }
+});
+
+test('create_column: force passes a dropdown named status, other names and a real status column pass', async () => {
+  const cases = [
+    { name: 'סטטוס', type: 'dropdown', force: true },
+    { name: 'קטגוריה', type: 'dropdown' },
+    { name: 'Status', type: 'status' },
+    { name: 'סטטוס', type: 'status' },
+  ];
+  for (const c of cases) {
+    const { calls, call } = await harness();
+    const res = await call('create_column', {
+      projectId: 'p1',
+      boardId: 'b1',
+      settings: { options: ['A', 'B'] },
+      ...c,
+    });
+    assert.equal(res.isError, false, res.text);
+    assert.equal(calls.length, 1, `${c.name}/${c.type} reaches the API`);
+    assert.equal(calls[0].method, 'POST');
+    assert.equal(calls[0].body.type, c.type);
+  }
+});
+
+test('update_column objects to renaming a dropdown to a status name, and force passes', async () => {
+  const columns = [{ id: 'c1', name: 'Kind', type: 'dropdown', settings: { options: ['A'] } }];
+  let h = await harness((method) => (method === 'GET' ? columns : {}));
+  let res = await h.call('update_column', {
+    projectId: 'p1',
+    boardId: 'b1',
+    columnId: 'c1',
+    name: 'סטטוס',
+  });
+  assert.equal(res.json.suggestedType, 'status', res.text);
+  assert.equal(h.calls.filter((c) => c.method === 'PATCH').length, 0);
+
+  h = await harness((method) => (method === 'GET' ? columns : {}));
+  res = await h.call('update_column', {
+    projectId: 'p1',
+    boardId: 'b1',
+    columnId: 'c1',
+    name: 'סטטוס',
+    force: true,
+  });
+  assert.equal(res.isError, false, res.text);
+  assert.equal(h.calls.filter((c) => c.method === 'PATCH').length, 1);
+});
+
+test('build_backend turns a dropdown named status into a status column, and keeps a proper one', async () => {
+  const spec = {
+    project: { name: 'Repairs' },
+    boards: [
+      {
+        name: 'Orders',
+        columns: [
+          { name: 'סטטוס', type: 'dropdown', options: ['New', 'Done'] },
+          { name: 'Stage', type: 'status', options: ['A', 'B'] },
+          { name: 'Category', type: 'dropdown', options: ['X', 'Y'] },
+        ],
+      },
+    ],
+  };
+  const { calls, call } = await harness(buildResponder());
+  const res = await call('build_backend', spec);
+  assert.equal(res.isError, false, res.text);
+  const sentTypes = Object.fromEntries(
+    calls
+      .filter((c) => c.method === 'POST' && c.path.endsWith('/columns'))
+      .map((c) => [c.body.name, c.body.type]),
+  );
+  assert.deepEqual(sentTypes, { 'סטטוס': 'status', Stage: 'status', Category: 'dropdown' });
+  assert.match(res.text, /created as status rather than dropdown/);
+});
+
+/** A fake board: its columns, its rows and its kind, answering the routes query_items uses. */
+function boardFake({ kind = 'data', columns, rows, boardExtra = {} }) {
+  return (method, path) => {
+    if (method !== 'GET') return {};
+    if (/\/boards\/[^/]+\/columns$/.test(path)) return columns;
+    if (/\/boards\/[^/]+$/.test(path)) {
+      return { id: 'b1', metadata: kind === 'data' ? { kind: 'data' } : {}, ...boardExtra };
+    }
+    if (path.includes('/items')) {
+      const q = new URL(`https://x${path}`).searchParams;
+      const limit = Number(q.get('limit') ?? 200);
+      const page = Number(q.get('page') ?? 1);
+      const slice = rows.slice((page - 1) * limit, page * limit);
+      return { items: slice, meta: { currentPage: page, itemsPerPage: limit, totalItems: rows.length } };
+    }
+    return {};
+  };
+}
+
+const DROPDOWN_COLUMNS = [
+  { id: 'c-title', name: 'Title', type: 'text' },
+  { id: 'c-status', name: 'סטטוס', type: 'dropdown', settings: { options: STATUS_OPTIONS } },
+  { id: 'c-kind', name: 'קטגוריה', type: 'dropdown', settings: { options: [{ value: 'a', label: 'A' }] } },
+];
+
+/** A row of the admin shape: cells as [{ columnId, value }]. */
+function row(id, status) {
+  return {
+    id,
+    title: id,
+    status: 'todo',
+    cells: [
+      { columnId: 'c-title', value: { value: id } },
+      ...(status === undefined ? [] : [{ columnId: 'c-status', value: { value: status } }]),
+    ],
+  };
+}
+
+const ROWS = [
+  row('r1', 'Received'),
+  row('r2', 'in_repair'),
+  row('r3', 'Completed'),
+  row('r4'),
+  row('r5', 'Completed'),
+];
+
+const ids = (json) => json.map((r) => r.id);
+
+test('query_items: a dropdown named status is filtered client-side, by value or label', async () => {
+  for (const wanted of ['completed', 'Completed', ' COMPLETED ']) {
+    const { calls, call } = await harness(boardFake({ columns: DROPDOWN_COLUMNS, rows: ROWS }));
+    const res = await call('query_items', { projectId: 'p1', boardId: 'b1', status: wanted });
+    assert.equal(res.isError, false, res.text);
+    assert.deepEqual(ids(res.json), ['r3', 'r5'], wanted);
+    // The include filter is not sent: a server that cannot see the column would answer with nothing.
+    const itemCalls = calls.filter((c) => c.path.includes('/items'));
+    assert.ok(itemCalls.length > 0);
+    assert.ok(itemCalls.every((c) => !c.path.includes('status=')), 'no status param sent');
+  }
+  // Label differs from value: "In Repair" is stored as in_repair.
+  let h = await harness(boardFake({ columns: DROPDOWN_COLUMNS, rows: ROWS }));
+  let res = await h.call('query_items', { projectId: 'p1', boardId: 'b1', status: 'In Repair,received' });
+  assert.deepEqual(ids(res.json), ['r1', 'r2']);
+  h = await harness(boardFake({ columns: DROPDOWN_COLUMNS, rows: ROWS }));
+  res = await h.call('query_items', { projectId: 'p1', boardId: 'b1', status: 'in_repair' });
+  assert.deepEqual(ids(res.json), ['r2']);
+});
+
+test('query_items: excludeStatus on a status dropdown keeps rows with no status, by value or label', async () => {
+  let h = await harness(boardFake({ columns: DROPDOWN_COLUMNS, rows: ROWS }));
+  let res = await h.call('query_items', { projectId: 'p1', boardId: 'b1', excludeStatus: 'completed' });
+  assert.equal(res.isError, false, res.text);
+  assert.deepEqual(ids(res.json), ['r1', 'r2', 'r4']);
+  // Still passed to the server, where the fixed backend resolves it.
+  assert.ok(h.calls.some((c) => c.path.includes('excludeStatus=completed')));
+
+  h = await harness(boardFake({ columns: DROPDOWN_COLUMNS, rows: ROWS }));
+  res = await h.call('query_items', { projectId: 'p1', boardId: 'b1', excludeStatus: 'In Repair,Completed' });
+  assert.deepEqual(ids(res.json), ['r1', 'r4']);
+});
+
+test('query_items: a cell holding a bare string or the label still matches', async () => {
+  const rows = [
+    { id: 'a', cells: [{ columnId: 'c-status', value: 'Completed' }] },
+    { id: 'b', cells: [{ columnId: 'c-status', value: { value: 'In Repair' } }] },
+    { id: 'c', cells: { 'c-status': 'Received' } },
+  ];
+  const { call } = await harness(boardFake({ columns: DROPDOWN_COLUMNS, rows }));
+  const res = await call('query_items', { projectId: 'p1', boardId: 'b1', status: 'completed,in_repair' });
+  assert.deepEqual(ids(res.json), ['a', 'b']);
+});
+
+test('query_items: the client-side filter applies to every page it concatenates', async () => {
+  const many = [];
+  for (let i = 0; i < 450; i++) many.push(row(`r${i}`, i % 3 === 0 ? 'Completed' : 'Received'));
+  const { calls, call } = await harness(boardFake({ columns: DROPDOWN_COLUMNS, rows: many }));
+  const res = await call('query_items', { projectId: 'p1', boardId: 'b1', excludeStatus: 'Completed' });
+  assert.equal(res.json.length, 300);
+  assert.ok(res.json.every((r) => r.id.slice(1) % 3 !== 0));
+  assert.equal(calls.filter((c) => c.path.includes('/items')).length, 3, 'three pages of 200 were read');
+});
+
+test('query_items: with an explicit limit the page is filtered and the answer says so', async () => {
+  const { call } = await harness(boardFake({ columns: DROPDOWN_COLUMNS, rows: ROWS }));
+  const res = await call('query_items', {
+    projectId: 'p1',
+    boardId: 'b1',
+    status: 'Completed',
+    limit: 4,
+    page: 1,
+  });
+  assert.equal(res.isError, false, res.text);
+  assert.deepEqual(ids(res.json.items), ['r3']);
+  assert.match(res.json.note, /after the page was fetched/);
+  assert.match(res.json.note, /fewer than 4 rows/);
+});
+
+test('query_items: a board with no status column is a tool error that lists its dropdowns', async () => {
+  const columns = DROPDOWN_COLUMNS.filter((c) => c.id !== 'c-status');
+  for (const args of [{ status: 'Completed' }, { excludeStatus: 'Completed' }]) {
+    const { calls, call } = await harness(boardFake({ columns, rows: ROWS }));
+    const res = await call('query_items', { projectId: 'p1', boardId: 'b1', ...args });
+    assert.equal(res.isError, true, res.text);
+    assert.match(res.text, /no status column/);
+    assert.match(res.text, /"קטגוריה" \(id c-kind\)/);
+    assert.equal(
+      calls.filter((c) => c.path.includes('/items')).length,
+      0,
+      'no rows were fetched',
+    );
+  }
+  // Without any status filter the same board is queried as always.
+  const { call } = await harness(boardFake({ columns, rows: ROWS }));
+  const res = await call('query_items', { projectId: 'p1', boardId: 'b1' });
+  assert.equal(res.isError, false, res.text);
+  assert.equal(res.json.length, ROWS.length);
+});
+
+test('query_items: a board with a real status column is unchanged and costs no extra request', async () => {
+  const columns = [
+    { id: 'c-title', name: 'Title', type: 'text' },
+    { id: 'c-st', name: 'Stage', type: 'status', settings: { options: STATUS_OPTIONS } },
+  ];
+  // Rows the server returned for the filter: the tool must not touch them.
+  const served = [row('s1', 'Received'), row('s2', 'Completed')];
+  const { calls, call } = await harness(
+    boardFake({ columns, rows: served, boardExtra: { columns } }),
+  );
+  const res = await call('query_items', { projectId: 'p1', boardId: 'b1', status: 'Completed' });
+  assert.equal(res.isError, false, res.text);
+  assert.deepEqual(ids(res.json), ['s1', 's2']);
+  // The board answer carried its columns, so there was no separate columns request.
+  assert.equal(calls.filter((c) => c.path.endsWith('/columns')).length, 0);
+  const itemCall = calls.find((c) => c.path.includes('/items'));
+  assert.match(itemCall.path, /status=Completed/);
+
+  // Board answer without columns: exactly one columns request, still no client-side filtering.
+  const h = await harness(boardFake({ columns, rows: served }));
+  const res2 = await h.call('query_items', { projectId: 'p1', boardId: 'b1', status: 'Completed' });
+  assert.deepEqual(ids(res2.json), ['s1', 's2']);
+  assert.equal(h.calls.filter((c) => c.path.endsWith('/columns')).length, 1);
+  assert.equal(h.calls.filter((c) => c.path === '/projects/p1/boards/b1').length, 1);
+});
+
+test('query_items without a status filter makes no columns request', async () => {
+  const { calls, call } = await harness(boardFake({ columns: [], rows: ROWS }));
+  const res = await call('query_items', { projectId: 'p1', boardId: 'b1', search: 'x' });
+  assert.equal(res.isError, false, res.text);
+  assert.equal(calls.filter((c) => c.path.endsWith('/columns')).length, 0);
+});
+
+test('query_items sorted by status on a board with no status column is refused too', async () => {
+  const { call } = await harness(boardFake({ columns: [{ id: 'c1', name: 'Title', type: 'text' }], rows: ROWS }));
+  const res = await call('query_items', { projectId: 'p1', boardId: 'b1', sort: '-status' });
+  assert.equal(res.isError, true, res.text);
+  assert.match(res.text, /status sort/);
+});
+
+test('query_items still answers when the columns cannot be read', async () => {
+  const fake = boardFake({ columns: [], rows: ROWS });
+  const { call } = await harness((method, path, body, n) => {
+    if (path.endsWith('/columns')) throw new Error('boom');
+    return fake(method, path, body, n);
+  });
+  const res = await call('query_items', { projectId: 'p1', boardId: 'b1', status: 'Completed' });
+  assert.equal(res.isError, false, res.text);
+  assert.equal(res.json.length, ROWS.length);
+});
+
+test('create_item / update_item: status on a data board is refused and names the status column', async () => {
+  const fake = boardFake({ columns: DROPDOWN_COLUMNS, rows: [] });
+  let h = await harness(fake);
+  let res = await h.call('create_item', { projectId: 'p1', boardId: 'b1', title: 'x', status: 'done' });
+  assert.equal(res.isError, true, res.text);
+  assert.match(res.text, /data board/);
+  assert.match(res.text, /"סטטוס" \(id c-status\)/);
+  assert.equal(h.calls.filter((c) => c.method === 'POST').length, 0);
+
+  h = await harness(fake);
+  res = await h.call('update_item', { projectId: 'p1', boardId: 'b1', itemId: 'i1', status: 'done' });
+  assert.equal(res.isError, true, res.text);
+  assert.match(res.text, /set_cell/);
+  assert.equal(h.calls.filter((c) => c.method === 'PATCH').length, 0);
+});
+
+test('create_item / update_item: status on a task board goes through, and other calls cost no board read', async () => {
+  const fake = boardFake({ kind: 'tasks', columns: [], rows: [] });
+  let h = await harness(fake);
+  let res = await h.call('create_item', { projectId: 'p1', boardId: 'b1', title: 'x', status: 'done' });
+  assert.equal(res.isError, false, res.text);
+  assert.equal(h.calls.find((c) => c.method === 'POST').body.status, 'done');
+
+  h = await harness(fake);
+  res = await h.call('update_item', { projectId: 'p1', boardId: 'b1', itemId: 'i1', status: 'done' });
+  assert.equal(res.isError, false, res.text);
+  assert.equal(h.calls.find((c) => c.method === 'PATCH').body.status, 'done');
+
+  // No status given: no extra request, on any board.
+  h = await harness(boardFake({ columns: DROPDOWN_COLUMNS, rows: [] }));
+  res = await h.call('create_item', { projectId: 'p1', boardId: 'b1', title: 'x' });
+  assert.equal(res.isError, false, res.text);
+  assert.equal(h.calls.length, 1);
+});

@@ -3,6 +3,32 @@
 All notable changes to `@tasklite/mcp`. Versions that were never published
 are folded into the next published one, so the numbers on npm may skip.
 
+## Unreleased
+
+A board's status can no longer be set up or filtered in a way that silently
+does nothing.
+
+The server resolves the `status` / `excludeStatus` filters against a column of
+type `status` only. A status built as a dropdown called "סטטוס" was filtered on
+a hidden task field instead, so `excludeStatus` returned every row.
+
+### Changed
+- `create_column`, `update_column` and `build_backend`: a `dropdown` whose name
+  says it is the status (status, סטטוס, מצב) is rejected with
+  `suggestedType: "status"`, like the existing text-typed case; `force: true`
+  overrides it. `build_backend` creates such a column as `status` and says so
+  in its notes.
+- `query_items`: with `status`, `excludeStatus` or a status sort, the board's
+  columns are checked. A board with no status column returns an error that
+  lists its dropdown columns instead of unfiltered rows. A board whose status
+  is a dropdown named like a status is filtered by the tool on that dropdown's
+  cell (by option value or label, case-insensitive), so it is right even
+  against a server that does not see the column; with an explicit `limit` the
+  answer carries a `note` that the page was filtered after fetching.
+- `create_item` / `update_item`: `status` on a data board is refused, with the
+  board's status column named. It only ever wrote a hidden task field there.
+  Set the column with `cells` or `set_cell`.
+
 ## 0.17.0, 2026-10-13
 
 Giving a person access to an app is one call: a phone number and a role.
