@@ -991,3 +991,14 @@ test('set_cells_if_unchanged does not dress other errors as conflicts: a 403 sta
   assert.match(res.text, /403/);
   assert.equal(res.json?.code, undefined);
 });
+
+test('get_cells reads the item cells route (the database, not the item cache) and returns one value per asked column, empty when absent', async () => {
+  const { calls, call } = await harness(() => [
+    { id: 'x1', columnId: 'c1', value: { value: 'idle|t' }, column: { name: 'state' } },
+    { id: 'x2', columnId: 'c2', value: { value: 'https://a.tasklite.dev' } },
+  ]);
+  const res = await call('get_cells', { projectId: 'p1', boardId: 'b1', itemId: 'i1', columnIds: ['C1', 'c3'] });
+  assert.equal(res.isError, false, res.text);
+  assert.deepEqual(calls, [{ method: 'GET', path: '/projects/p1/boards/b1/items/i1/cells', body: undefined }]);
+  assert.deepEqual(res.json, { cells: [{ columnId: 'c1', value: { value: 'idle|t' } }, { columnId: 'c3', value: null }] });
+});

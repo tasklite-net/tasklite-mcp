@@ -14,6 +14,15 @@ are folded into the next published one, so the numbers on npm may skip.
   [{columnId, current}], so the caller reads again and decides instead of
   resending. Needs a backend with #315.
 
+- `get_cells`: the cells of one item read from the database, not the item
+  cache, one current value per column (the value `set_cells_if_unchanged`
+  compares, with tastlite-be#316's code part); an asked column that is not
+  stored comes back as `null`. The read a state door decides on.
+- `scripts/smoke-conditional.mjs`: the post-deploy check of the conditional
+  write through this server over stdio, against any API URL and a row
+  reserved for it. It restores only over its own writes.
+- CI: every PR and push to main runs the offline tests on Node 20, 22, 24.
+
 ### Changed
 - API errors are `TaskLiteApiError` (status and body kept). The message is
   unchanged.
