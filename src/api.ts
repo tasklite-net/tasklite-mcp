@@ -76,6 +76,23 @@ interface Session {
   organizationId: string | null;
 }
 
+/**
+ * A refusal from the API, with its status and its body as sent. The message
+ * is the same as before, so callers that only print it see no change; a tool
+ * that must pass the server's answer on (set_cells_if_unchanged) reads
+ * status and body.
+ */
+export class TaskLiteApiError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+    readonly body: unknown,
+  ) {
+    super(message);
+    this.name = "TaskLiteApiError";
+  }
+}
+
 export interface OrganizationSummary {
   id: string;
   name: string;
@@ -196,7 +213,11 @@ export class TaskLiteApi {
         typeof parsed === 'object' && parsed !== null && 'message' in (parsed as any)
           ? JSON.stringify((parsed as any).message)
           : String(parsed).slice(0, 500);
-      throw new Error(`TaskLite API ${method} ${path} failed (${res.status}): ${message}`);
+      throw new TaskLiteApiError(
+        `TaskLite API ${method} ${path} failed (${res.status}): ${message}`,
+        res.status,
+        parsed,
+      );
     }
 
     return parsed as T;
