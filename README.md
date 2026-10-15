@@ -19,9 +19,9 @@ over.
 > **tasklite.net**, published as `@tasklite/mcp` and as `net.tasklite/mcp` in
 > the MCP registry.
 
-## The 63 tools
+## The 64 tools
 
-63 when installed locally, 58 over the hosted server (the five account tools
+64 when installed locally, 59 over the hosted server (the five account tools
 `sign_up` `connect` `login` `disconnect` `connection_status` exist only
 locally; hosted connections sign in with OAuth). Every tool declares
 `readOnlyHint`, `destructiveHint`, `idempotentHint` and `openWorldHint`, so a
@@ -31,7 +31,7 @@ client can tell what is safe to run unattended.
 | --- | --- |
 | Account | `sign_up` `connect` `login` `disconnect` `connection_status` `list_organizations` `configure_external_access` |
 | Structure | `create_project` `create_board` `create_column` `update_board` `update_column` `delete_board` `delete_column` `delete_project` `reorder_columns` `get_board_schema` `list_projects` `list_boards` `export_project` |
-| Data | `query_items` `create_item` `update_item` `set_cell` `delete_item` `search` `fetch` |
+| Data | `query_items` `create_item` `update_item` `set_cell` `set_cells_if_unchanged` `delete_item` `search` `fetch` |
 | Comments | `list_comments` `add_comment` `update_comment` `delete_comment` |
 | Files | `request_file_upload` `list_uploaded_files` `revoke_upload_link` |
 | Apps and API | `build_backend` `create_app` `publish_app` `list_apps` `get_app_spec` `create_app_endpoint` `list_app_endpoints` `update_app_endpoint` `delete_app_endpoint` `create_app_api_key` `configure_app_settings` |

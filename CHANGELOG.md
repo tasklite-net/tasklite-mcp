@@ -3,6 +3,21 @@
 All notable changes to `@tasklite/mcp`. Versions that were never published
 are folded into the next published one, so the numbers on npm may skip.
 
+## Unreleased
+
+### Added
+- `set_cells_if_unchanged`: compare-and-set on cells of one item, all or none,
+  through the backend's conditional route (tasklite-net/tastlite-be#315). Each
+  cell carries the value read (`expected`, null = empty) and the value to
+  write. A cell that changed since writes nothing, and the error carries the
+  server's body whole: `code` (CELL_CONFLICT or CELL_BUSY) and `conflicts`
+  [{columnId, current}], so the caller reads again and decides instead of
+  resending. Needs a backend with #315.
+
+### Changed
+- API errors are `TaskLiteApiError` (status and body kept). The message is
+  unchanged.
+
 ## 0.17.1, 2026-10-14
 
 A board's status can no longer be set up or filtered in a way that silently

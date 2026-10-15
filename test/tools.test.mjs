@@ -946,3 +946,48 @@ test('create_item / update_item: status on a task board goes through, and other 
   assert.equal(res.isError, false, res.text);
   assert.equal(h.calls.length, 1);
 });
+
+// ── set_cells_if_unchanged: compare-and-set, all or none (tastlite-be #315) ──
+
+test('set_cells_if_unchanged sends every cell, with what was read, in one PUT to the conditional route', async () => {
+  const { calls, call } = await harness(() => ({ cells: [{ columnId: 'c1', value: { value: 'idle|t' } }] }));
+  const cells = [
+    { columnId: 'c1', value: 'idle|t', expected: 'building|t0' },
+    { columnId: 'c2', value: 'https://a.tasklite.dev', expected: null },
+  ];
+  const res = await call('set_cells_if_unchanged', { projectId: 'p1', boardId: 'b1', itemId: 'i1', cells });
+  assert.equal(res.isError, false);
+  assert.deepEqual(calls, [{ method: 'PUT', path: '/projects/p1/boards/b1/items/i1/cells/conditional', body: { cells } }]);
+});
+
+test('set_cells_if_unchanged returns a 409 whole (code, conflicts), so the caller can read again and decide', async () => {
+  const { TaskLiteApiError } = await import('../dist/api.js');
+  const body = { code: 'CELL_CONFLICT', message: 'CELL_CONFLICT: a cell changed since it was read', conflicts: [{ columnId: 'c1', current: { value: 'human|t|director' } }] };
+  const { calls, call } = await harness(() => {
+    throw new TaskLiteApiError('TaskLite API PUT ... failed (409)', 409, body);
+  });
+  const res = await call('set_cells_if_unchanged', { projectId: 'p1', boardId: 'b1', itemId: 'i1', cells: [{ columnId: 'c1', value: 'idle|t', expected: 'building|t0' }] });
+  assert.equal(res.isError, true);
+  assert.deepEqual(res.json, { status: 409, ...body });
+  assert.equal(calls.length, 1, 'not retried');
+});
+
+test('set_cells_if_unchanged refuses a cell without expected or value before any API call', async () => {
+  const { calls, call } = await harness();
+  const noExpected = await call('set_cells_if_unchanged', { projectId: 'p1', boardId: 'b1', itemId: 'i1', cells: [{ columnId: 'c1', value: 'x' }] });
+  const noValue = await call('set_cells_if_unchanged', { projectId: 'p1', boardId: 'b1', itemId: 'i1', cells: [{ columnId: 'c1', expected: 'x' }] });
+  assert.equal(noExpected.isError, true);
+  assert.equal(noValue.isError, true);
+  assert.equal(calls.length, 0);
+});
+
+test('set_cells_if_unchanged does not dress other errors as conflicts: a 403 stays an error with its message', async () => {
+  const { TaskLiteApiError } = await import('../dist/api.js');
+  const { call } = await harness(() => {
+    throw new TaskLiteApiError('TaskLite API PUT ... failed (403): "You do not have permission to modify this item"', 403, { message: 'You do not have permission to modify this item' });
+  });
+  const res = await call('set_cells_if_unchanged', { projectId: 'p1', boardId: 'b1', itemId: 'i1', cells: [{ columnId: 'c1', value: 'x', expected: null }] });
+  assert.equal(res.isError, true);
+  assert.match(res.text, /403/);
+  assert.equal(res.json?.code, undefined);
+});
