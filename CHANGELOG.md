@@ -3,7 +3,7 @@
 All notable changes to `@tasklite/mcp`. Versions that were never published
 are folded into the next published one, so the numbers on npm may skip.
 
-## Unreleased
+## 0.18.0, 2026-10-17
 
 ### Added
 - `set_cells_if_unchanged`: compare-and-set on cells of one item, all or none,
@@ -16,7 +16,7 @@ are folded into the next published one, so the numbers on npm may skip.
 
 - `get_cells`: the cells of one item read from the database, not the item
   cache, one current value per column (the value `set_cells_if_unchanged`
-  compares, with tastlite-be#316's code part); an asked column that is not
+  compares; tastlite-be#324 keeps one row per cell); an asked column that is not
   stored comes back as `null`. The read a state door decides on.
 - `scripts/smoke-conditional.mjs`: the post-deploy check of the conditional
   write through this server over stdio, against any API URL and a row
