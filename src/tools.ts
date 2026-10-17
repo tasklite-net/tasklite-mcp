@@ -12,6 +12,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import {
   TaskLiteApi,
+  TaskLiteApiError,
   envApiUrl,
   envAppUrl,
   envApiKeyOverrides,
@@ -460,6 +461,21 @@ const ANNOTATIONS: Record<string, Record<string, unknown>> = {
     readOnlyHint: false,
     destructiveHint: false,
     idempotentHint: true,
+    openWorldHint: false,
+  },
+  get_cells: {
+    title: "Get cells",
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: true,
+    openWorldHint: false,
+  },
+  set_cells_if_unchanged: {
+    title: "Set cells if unchanged",
+    readOnlyHint: false,
+    destructiveHint: false,
+    // The same call after it succeeded is refused: `expected` no longer holds.
+    idempotentHint: false,
     openWorldHint: false,
   },
   delete_item: {
@@ -2270,6 +2286,113 @@ export function registerTools(
           { value },
         ),
       ),
+  );
+
+  tool(
+    "get_cells",
+    "Read cells of one item from the database (not a cache): one current value per column, the value set_cells_if_unchanged compares. Use it to decide a conditional write, and pass each value back as `expected` exactly as it came.",
+    {
+      projectId: z
+        .string()
+        .describe("Project id (from list_projects / create_project)"),
+      boardId: z
+        .string()
+        .describe("Board id (from list_boards / create_board)"),
+      itemId: z.string().describe("Item (row) id"),
+      columnIds: z
+        .array(z.string())
+        .optional()
+        .describe("Only these columns (default: every cell of the item)"),
+    },
+    async ({ projectId, boardId, itemId, columnIds }) => {
+      const rows = await getApi().request<
+        Array<{ columnId?: string | null; value?: unknown }>
+      >("GET", `/projects/${projectId}/boards/${boardId}/items/${itemId}/cells`);
+      const want = columnIds?.length
+        ? new Set(columnIds.map((c: string) => c.toLowerCase()))
+        : null;
+      const cells = (Array.isArray(rows) ? rows : [])
+        .filter((r) => r.columnId && (!want || want.has(r.columnId.toLowerCase())))
+        .map((r) => ({ columnId: r.columnId, value: r.value ?? null }));
+      // A column asked for and not stored is empty, the way the conditional
+      // write reads it (expected null).
+      if (want) {
+        const have = new Set(cells.map((c) => String(c.columnId).toLowerCase()));
+        for (const c of columnIds!)
+          if (!have.has(c.toLowerCase())) cells.push({ columnId: c.toLowerCase(), value: null });
+      }
+      return ok({ cells });
+    },
+  );
+
+  const cellValue = z.union([
+    z.string(),
+    z.number(),
+    z.boolean(),
+    z.null(),
+    z.array(z.unknown()),
+    z.record(z.unknown()),
+  ]);
+  tool(
+    "set_cells_if_unchanged",
+    "Compare-and-set on cells of one item, all or none. Each cell carries the value you read (`expected`, null = empty) and the value to write. If any cell no longer holds its `expected`, nothing is written and the answer is an error with code CELL_CONFLICT and `conflicts` [{columnId, current}]: read again (use `current`), decide again, and never resend the same call. CELL_BUSY (the row is being written) also writes nothing: read again, then retry. Plain columns only (not relation, file, lookup, rollup, formula, button or system columns). Use set_cell for a write that needs no precondition.",
+    {
+      projectId: z
+        .string()
+        .describe("Project id (from list_projects / create_project)"),
+      boardId: z
+        .string()
+        .describe("Board id (from list_boards / create_board)"),
+      itemId: z.string().describe("Item (row) id"),
+      cells: z
+        .array(
+          z.object({
+            columnId: z.string().describe("Column id (from get_board_schema)"),
+            value: cellValue.describe("The value to write; null clears the cell"),
+            expected: cellValue.describe(
+              "The value you read, exactly as it came back (null = empty or missing)",
+            ),
+          }),
+        )
+        .min(1)
+        .max(50)
+        .describe("1 to 50 cells of this item, each column once"),
+    },
+    async ({ projectId, boardId, itemId, cells }) => {
+      try {
+        return ok(
+          await getApi().request(
+            "PUT",
+            `/projects/${projectId}/boards/${boardId}/items/${itemId}/cells/conditional`,
+            { cells },
+          ),
+        );
+      } catch (e) {
+        // The refusal goes back whole (code, conflicts): the caller decides
+        // from it. A plain Error would keep only the message.
+        if (
+          e instanceof TaskLiteApiError &&
+          (e.status === 409 || e.status === 503) &&
+          e.body &&
+          typeof e.body === "object"
+        ) {
+          return {
+            isError: true,
+            content: [
+              {
+                type: "text" as const,
+                text: JSON.stringify(
+                  sanitizeUsersDeep({ status: e.status, ...(e.body as object) }),
+                  null,
+                  2,
+                ),
+              },
+            ],
+          };
+        }
+        throw e;
+      }
+    },
   );
 
   tool(
