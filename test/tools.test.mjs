@@ -1002,3 +1002,27 @@ test('get_cells reads the item cells route (the database, not the item cache) an
   assert.deepEqual(calls, [{ method: 'GET', path: '/projects/p1/boards/b1/items/i1/cells', body: undefined }]);
   assert.deepEqual(res.json, { cells: [{ columnId: 'c1', value: { value: 'idle|t' } }, { columnId: 'c3', value: null }] });
 });
+
+test('get_email_usage reads the organization email usage route, for the given or the default organization', async () => {
+  const usage = { month: '2026-10', used: 12, queued: 3, limit: 300, marketingAllowed: false, paused: false, pausedReason: null };
+  const { calls, call } = await harness(() => usage);
+  const own = await call('get_email_usage', {});
+  assert.equal(own.isError, false, own.text);
+  assert.deepEqual(own.json, usage);
+  const other = await call('get_email_usage', { organizationId: 'org-9' });
+  assert.equal(other.isError, false, other.text);
+  assert.deepEqual(calls, [
+    { method: 'GET', path: '/organizations/org-1/email/usage', body: undefined },
+    { method: 'GET', path: '/organizations/org-9/email/usage', body: undefined },
+  ]);
+});
+
+test('create_automation documents the send_email kind, attachments and quotas, and the app email endpoint', async () => {
+  const { client } = await harness();
+  const tools = (await client.listTools()).tools;
+  const create = tools.find((t) => t.name === 'create_automation');
+  for (const needle of ['"marketing"', 'attachments', 'Free 300', 'Pro 20000', '_email/send', 'get_email_usage']) {
+    assert.ok(create.description.includes(needle), `missing ${needle}`);
+  }
+  assert.ok(tools.some((t) => t.name === 'get_email_usage'));
+});

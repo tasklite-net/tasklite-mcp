@@ -337,6 +337,13 @@ const ANNOTATIONS: Record<string, Record<string, unknown>> = {
     idempotentHint: true,
     openWorldHint: false,
   },
+  get_email_usage: {
+    title: "Get email usage",
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: true,
+    openWorldHint: false,
+  },
   configure_external_access: {
     title: "Configure external user access",
     readOnlyHint: false,
@@ -1419,6 +1426,23 @@ export function registerTools(
     "List the organizations the authenticated user belongs to. Use the returned id as organizationId in other tools.",
     {},
     async () => ok(await getApi().request("GET", "/organizations")),
+  );
+
+  tool(
+    "get_email_usage",
+    "How much of the monthly email quota an organization has used: emails sent this month, emails waiting in the queue, the plan limit (Free 300, Plus 3000, Pro 20000; null means unlimited), whether the plan allows marketing email, and whether sending is paused for the organization (too many bounces or complaints). Covers email sent by automations, the communications endpoints and app servers (POST /apps/<slug>/api/_email/send).",
+    {
+      organizationId: z
+        .string()
+        .optional()
+        .describe("Defaults to the credential organization"),
+    },
+    async ({ organizationId }) => {
+      const orgId = await resolveOrg(organizationId);
+      return ok(
+        await getApi().request("GET", `/organizations/${orgId}/email/usage`),
+      );
+    },
   );
 
   tool(
@@ -4340,7 +4364,7 @@ export function registerTools(
 
   tool(
     "create_automation",
-    'Create an automation on a board: when something happens, do something. The most useful action here is http_request, which calls an external API and writes the answer back into columns, pair it with the "scheduled" trigger and the board keeps itself up to date (prices, exchange rates, shipment status, weather). Triggers: item_created, status_changed, column_value_changed, date_approaching, scheduled. Actions: http_request, send_notification, send_email, send_push, change_status, set_column_value, create_cross_board_item, send_webhook. The scheduled trigger has no cron expression: the server checks once an hour, and triggerConfig takes { intervalHours, runAtHour } only (intervalHours: at least this many hours between runs, default 24; runAtHour: 0-23, run only during that hour of the day in UTC, not in the user\'s time zone, so convert: 08:00 in Israel is runAtHour 5 in summer and 6 in winter). A scheduled run executes the actions once for every row of the board that passes conditions, so filter with conditions. send_push sends a notification to the phones of app users through the app\'s own Firebase project (set up once per app: push_status; try it with send_test_push). Its config: { title, body, data, userIds, recipientsFromRelation, includeRowOwner, sound, badge, dataOnly }. title and body take {{column name}} placeholders, title defaults to the row title. Recipients are the union of: the row\'s owner under row-level security (includeRowOwner, default true; false leaves them out), userIds (fixed user ids, as in list_app_users), and recipientsFromRelation, a dotted path of column NAMES such as "Client.Coach.Coach user" that walks relation columns from this row and whose LAST segment must be a people column holding user ids (a single segment is a people column on this board); it does not resolve the user linked to a row by an invite or by phone, so without such a people column use userIds or the row owner. data is a flat object of strings the app reads to decide where to open (itemId and boardId are added). sound: "default" or the file name of a sound bundled in the app; badge: 0 to 99999, 0 clears; dataOnly: true shows nothing and delivers only data (no title, body, sound or badge; iOS may throttle or drop it). With no recipient the action is skipped, not failed. Two more things every action list can use: a { type: "delay", config: { minutes | hours | days } } action pauses the run and resumes the actions after it later (reminders, follow-ups); and any network action (http_request, send_webhook, send_email, send_whatsapp) may carry config.retry: { attempts (1-5), delaySeconds (1-60) }. send_webhook accepts config.secret for an HMAC signature. create_cross_board_item copies a new row to another board: config { targetBoardId, title?: "{{item.title}}", columnValues: { "<column id on the TARGET board>": "{{<column NAME on this board>}}" } }; there is no mapping field, and a column left out is not copied. To act only on some rows pass conditions, e.g. [{ field: "<column id on this board>", operator: "equals", value: "New seller" }]. Change an automation later with update_automation; call list_automations first so you do not add a second one that does the same thing.',
+    'Create an automation on a board: when something happens, do something. The most useful action here is http_request, which calls an external API and writes the answer back into columns, pair it with the "scheduled" trigger and the board keeps itself up to date (prices, exchange rates, shipment status, weather). Triggers: item_created, status_changed, column_value_changed, date_approaching, scheduled. Actions: http_request, send_notification, send_email, send_push, change_status, set_column_value, create_cross_board_item, send_webhook. The scheduled trigger has no cron expression: the server checks once an hour, and triggerConfig takes { intervalHours, runAtHour } only (intervalHours: at least this many hours between runs, default 24; runAtHour: 0-23, run only during that hour of the day in UTC, not in the user\'s time zone, so convert: 08:00 in Israel is runAtHour 5 in summer and 6 in winter). A scheduled run executes the actions once for every row of the board that passes conditions, so filter with conditions. send_push sends a notification to the phones of app users through the app\'s own Firebase project (set up once per app: push_status; try it with send_test_push). Its config: { title, body, data, userIds, recipientsFromRelation, includeRowOwner, sound, badge, dataOnly }. title and body take {{column name}} placeholders, title defaults to the row title. Recipients are the union of: the row\'s owner under row-level security (includeRowOwner, default true; false leaves them out), userIds (fixed user ids, as in list_app_users), and recipientsFromRelation, a dotted path of column NAMES such as "Client.Coach.Coach user" that walks relation columns from this row and whose LAST segment must be a people column holding user ids (a single segment is a people column on this board); it does not resolve the user linked to a row by an invite or by phone, so without such a people column use userIds or the row owner. data is a flat object of strings the app reads to decide where to open (itemId and boardId are added). sound: "default" or the file name of a sound bundled in the app; badge: 0 to 99999, 0 clears; dataOnly: true shows nothing and delivers only data (no title, body, sound or badge; iOS may throttle or drop it). With no recipient the action is skipped, not failed. Two more things every action list can use: a { type: "delay", config: { minutes | hours | days } } action pauses the run and resumes the actions after it later (reminders, follow-ups); and any network action (http_request, send_webhook, send_email, send_whatsapp) may carry config.retry: { attempts (1-5), delaySeconds (1-60) }. send_webhook accepts config.secret for an HMAC signature. send_email sends mail from the organization to the people on a row. Its config: { to, subject, body, columnEmailField, fromName, replyTo, kind, attachments }. kind is "transactional" (the default: orders, receipts, notifications) or "marketing" (promotional mail: it needs the Pro plan or higher and a verified sender domain, and it gets an unsubscribe footer; people who unsubscribed are skipped). attachments is an array of FILE column ids on the triggering row (or {{column.<id>}}): the stored files in those cells are attached, up to 5MB in total, and a missing file is skipped instead of failing the action. Email is counted per month by plan: Free 300, Plus 3000, Pro 20000 (read the numbers with get_email_usage); a message held back by the quota is recorded as skipped in the communications log and can be resent from there. To send email from an app\'s own server instead of an automation, POST /apps/<slug>/api/_email/send with the app server key (X-API-Key, never a user token): { to: [up to 50 addresses], subject, html or text, replyTo, kind, attachmentIds: [stored file ids] }; each app may send 500 a day (429 APP_EMAIL_DAILY_LIMIT). create_cross_board_item copies a new row to another board: config { targetBoardId, title?: "{{item.title}}", columnValues: { "<column id on the TARGET board>": "{{<column NAME on this board>}}" } }; there is no mapping field, and a column left out is not copied. To act only on some rows pass conditions, e.g. [{ field: "<column id on this board>", operator: "equals", value: "New seller" }]. Change an automation later with update_automation; call list_automations first so you do not add a second one that does the same thing.',
     {
       projectId: z
         .string()
@@ -4377,7 +4401,7 @@ export function registerTools(
             config: z
               .record(z.any())
               .describe(
-                'Action-specific config, e.g. { url, method, headers, responseMapping } for http_request, or { title, body, recipientsFromRelation, includeRowOwner, userIds, data, sound, badge, dataOnly } for send_push',
+                'Action-specific config, e.g. { url, method, headers, responseMapping } for http_request, { title, body, recipientsFromRelation, includeRowOwner, userIds, data, sound, badge, dataOnly } for send_push, or { to, subject, body, kind: "transactional" | "marketing", attachments: ["<file column id>"] } for send_email',
               ),
           }),
         )
@@ -4444,7 +4468,7 @@ export function registerTools(
 
   tool(
     "update_automation",
-    "Change an existing automation: its actions, conditions, trigger config or name, or switch it off with isActive false. Fields left out stay as they are; actions and conditions, when given, replace the whole list. Use it to fix an automation instead of creating a second one next to it. Get the id from list_automations.",
+    "Change an existing automation: its actions, conditions, trigger config or name, or switch it off with isActive false. Fields left out stay as they are; actions and conditions, when given, replace the whole list. Use it to fix an automation instead of creating a second one next to it. Get the id from list_automations. For send_email actions, config.kind is transactional (default) or marketing (Pro plan or higher, verified sender domain, unsubscribe footer) and config.attachments is an array of file column ids on the row; see create_automation.",
     {
       projectId: z
         .string()
