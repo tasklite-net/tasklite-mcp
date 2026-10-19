@@ -77,7 +77,7 @@ the page. Use mode `policy`: `define_app_role` + `grant_app_role` (or
 true}`; columns by id with `read`/`write` role lists, `orMine` for "his own
 rows", `write: []` to lock; always lock `assignedTo`), then
 `update_app_endpoint` with `rowLevelSecurity: { enabled: true, mode: "policy" }`.
-Prove it with `explain_access` and `simulate_request` before saying it is done.
+For a lock or a controlled change add `rules` and `actions` (transfer, unlock, optional `approval`; the only way to change a `write: []` column; run by the frontend through POST /apps/<slug>/api/<endpoint>/<itemId>/actions/<name>, no MCP tool runs them). Prove it with `explain_access` and `simulate_request` before saying it is done.
 `get_item_history` shows who changed what on a row. Full example:
 docs/app-access.md.
 

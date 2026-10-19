@@ -96,7 +96,14 @@ to change part of it): rows.read/write [{roles, scope: "all" | {mine: columnId}
 Field: {read, write}} where a list [] locks the column and
 {roles, orMine: columnId} means "or his own rows". Always lock assignedTo with
 {"write": []}. Then prove it with explain_access and simulate_request.
-get_item_history reads who changed which field of a row.
+Beyond roles and columns: scope {where: condition}, write rules (lock a row
+unless the role is exempt) and named actions (transfer, unlock: role-gated,
+validated input, a fixed set of writes, recorded with an event and a reason;
+the only way to change a column locked with []; optional approval workflow).
+Actions are App API only: the frontend calls POST /apps/<slug>/api/<endpoint>/
+<itemId>/actions/<name>, approvers use GET .../me/approvals and POST
+.../approvals/<requestId>/decide. There is no tool that runs one; simulate_request
+with action + itemId checks it. get_item_history reads who changed which field of a row.
 App-level settings (password reset return URLs, account deletion):
 configure_app_settings. Removing an endpoint: delete_app_endpoint.
 

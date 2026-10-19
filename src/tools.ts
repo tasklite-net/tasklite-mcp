@@ -3926,10 +3926,13 @@ export function registerTools(
     `Set who may read, write, create and delete rows of a board, and which columns, as a JSON document (a FULL REPLACE of the board's policy; read get_board_policy first to change part of one). It is enforced on the app's endpoints of this board whose rowLevelSecurity.mode is "policy" (create_app_endpoint / update_app_endpoint). Organization owners, admins and editors using the app are let through unless internalBypass is false. Fields:
 - schemaVersion: 1 (required).
 - internalBypass: default true.
-- rows.read / rows.write: a list of { roles, scope }. scope is "all", { "mine": "<column id>" } (rows whose column points at the caller: a relation to the row that stands for them, their verified phone or email, or a people column; add "via": "<relation column id>" for one more hop), or { "created": true } (rows they created through the app). A user gets the union of the rules that name any of their roles; no rule for their roles means no access.
+- rows.read / rows.write: a list of { roles, scope }. scope is "all", { "mine": "<column id>" } (rows whose column points at the caller: a relation to the row that stands for them, their verified phone or email, or a people column; add "via": "<relation column id>" for one more hop), { "created": true } (rows they created through the app) or { "where": CONDITION } (rows a condition selects, e.g. open cases older than 3 days, for an escalation view). A user gets the union of the rules that name any of their roles; no rule for their roles means no access.
 - rows.create / rows.delete: plain role lists.
 - columns: { "<column id or reserved field>": { "read": ACCESS, "write": ACCESS } }. ACCESS is a role list, or { "roles": [...], "orMine": "<column id>" } (these roles, or anyone for whom the row is theirs by that column). A column without an entry follows the row rules. An EMPTY list ("write": []) locks the column for everyone through the app: use it for assignedTo and for any field only an admin or an action may change. Reserved fields are title, description, status, priority, dueDate and assignedTo, addressed by those names. Reserved fields are open to anyone who may write the row unless you lock them, so lock assignedTo.
-- rules, actions: conditional rules and named actions (backend stage 3); the server validates their shape.
+- CONDITION (in where, rules.when): { "all": [c...] } | { "any": [c...] } | { "not": c } | a leaf { "col": "<column id or reserved field>", "op": OP, ... }. OP: eq / neq (with "value"), in (value is a list), empty, notEmpty, isMe (the column points at the caller; optional "via"), olderThan (col is updatedAt, createdAt or a date column; give "hours" or "days"), changed (this write sets col; only in rules). No free expressions.
+- rules: [{ "id", "when": CONDITION, "deny": { "write": "*" | [column ids], "except": [roles] }, "require": [column ids that must be filled after the write], "except": [roles], "message" }]. deny is judged on the row as it is BEFORE the write, require AFTER it. Rules bind people acting through the app; internal bypass users and an action's own columns are not held to deny.
+- actions: { "<name>": { "roles": [...], "input": { "<input name>": { "col": "<column id the value is written to>", "required": true } }, "set": { "<column id>": constant }, "event": "TRANSFER", "scope": "write" | "read", "approval": "<approval workflow id of the board>" } }. An action is role-gated, validates its input (an input without col is only data; "reason" is always accepted and goes to the history), writes its set and bound inputs in one transaction, and records event and reason in the history. It is the only way to change a column whose write is []. With approval it files a request for that workflow instead of writing; the write happens when the last step approves. Roles named by approval steps must exist (define_app_role). Actions run through the App API only (see below).
+Frontends run an action with POST /apps/<slug>/api/<endpoint>/<itemId>/actions/<name> and the inputs as the body; approvers read GET /apps/<slug>/api/me/approvals and answer POST /apps/<slug>/api/approvals/<requestId>/decide { "decision": "approve" | "reject", "comment"? }; GET /apps/<slug>/api/me/permissions lists the actions the caller may run as [{ name, allowed, roles, inputs, approval, event, scope }]. There is no MCP tool that runs an action.
 Roles are keys from list_app_roles, plus "*" (any signed-in user) and "public". Column ids come from get_board_schema. An invalid document is refused with POLICY_INVALID and an errors list naming each problem. Example (agents see and edit only their own cases, the manager sees and edits all, bookkeeping reads all, commission is visible to the owner, the manager and to the agent on his own rows):
 { "schemaVersion": 1,
   "rows": {
@@ -3942,8 +3945,15 @@ Roles are keys from list_app_roles, plus "*" (any signed-in user) and "public". 
   "columns": {
     "<commission column id>": { "read": { "roles": ["owner","manager"], "orMine": "<agent column id>" }, "write": ["owner"] },
     "<agent column id>": { "write": ["owner","manager"] },
-    "assignedTo": { "write": [] } } }
-Test it with explain_access and simulate_request before telling the user it is done. Requires organization owner or admin.`,
+    "assignedTo": { "write": [] } },
+  "rules": [ { "id": "lock", "when": { "all": [ { "col": "<locked column id>", "op": "eq", "value": true } ] },
+               "deny": { "write": "*", "except": ["owner","manager"] }, "message": "The case is locked to its agent" } ],
+  "actions": {
+    "transfer": { "roles": ["owner","manager"], "input": { "agent": { "col": "<agent column id>", "required": true }, "reason": { "required": true } },
+                  "set": { "<locked column id>": false }, "event": "TRANSFER" },
+    "unlock":   { "roles": ["owner","manager"], "input": { "reason": { "required": true } }, "set": { "<locked column id>": false }, "event": "UNLOCK" },
+    "exception": { "roles": ["agent"], "input": { "reason": { "required": true } }, "set": { "<exception column id>": true }, "approval": "<workflow id, a role step>" } } }
+(The Achituv shape: a locked case cannot be edited except by the owner and the manager; transfer and unlock are the only way to change the agent or the lock, with a recorded reason; an exception asks a role step for approval.) Test it with explain_access and simulate_request before telling the user it is done. Requires organization owner or admin.`,
     {
       appId: appIdShape,
       boardId: z.string().describe("Board id (from list_boards)"),
@@ -4017,7 +4027,7 @@ Test it with explain_access and simulate_request before telling the user it is d
 
   tool(
     "simulate_request",
-    "Dry-run one app API request in the name of a user and get the verdict (allowed or refused, and why), changing nothing: the endpoint slug, the HTTP method, optionally an itemId and the column keys the body would carry. Use it to prove that a forbidden thing is refused (an agent PATCHing assignedTo, reading another agent's row) and an allowed one passes. Requires organization owner or admin.",
+    "Dry-run one app API request in the name of a user and get the verdict (allowed or refused, and why), changing nothing: the endpoint slug, the HTTP method (or the name of a policy action, with its itemId) and optionally the column keys the body would carry. Use it to prove that a forbidden thing is refused (an agent PATCHing assignedTo, reading another agent's row) and an allowed one passes. Requires organization owner or admin.",
     {
       appId: appIdShape,
       userId: z
@@ -4028,7 +4038,12 @@ Test it with explain_access and simulate_request before telling the user it is d
         .describe("Endpoint slug (from list_app_endpoints)"),
       method: z
         .enum(["GET", "POST", "PATCH", "PUT", "DELETE"])
-        .describe("HTTP method of the request"),
+        .optional()
+        .describe("HTTP method of the request. Pass this or action"),
+      action: z
+        .string()
+        .optional()
+        .describe("Name of a policy action to try on itemId (needs itemId) instead of a plain method"),
       itemId: z
         .string()
         .optional()
@@ -4039,13 +4054,20 @@ Test it with explain_access and simulate_request before telling the user it is d
         .describe("Field or column keys the request body would write"),
       organizationId: orgIdShape,
     },
-    async ({ appId, userId, endpoint, method, itemId, bodyKeys, organizationId }) => {
+    async ({ appId, userId, endpoint, method, action, itemId, bodyKeys, organizationId }) => {
+      if (!method && !action) {
+        return ok({ error: "Pass method, or action together with itemId." });
+      }
+      if (action && !itemId) {
+        return ok({ error: "An action runs on a row: pass itemId." });
+      }
       const orgId = await resolveOrg(organizationId);
       return ok(
         await getApi().request("POST", `${permBase(orgId, appId)}/simulate`, {
           userId,
           endpoint,
-          method,
+          ...(method !== undefined ? { method } : {}),
+          ...(action !== undefined ? { action } : {}),
           ...(itemId !== undefined ? { itemId } : {}),
           ...(bodyKeys !== undefined ? { bodyKeys } : {}),
         }),

@@ -16,6 +16,10 @@ are folded into the next published one, so the numbers on npm may skip.
 - `get_item_history`: the change history of one item (field, from, to, time,
   actor, channel, event, reason) with `limit` and `before` paging, through the
   internal route `organizations/:orgId/items/:itemId/history`.
+- `set_board_policy` documents scope `where`, conditions (all/any/not, eq, neq, in,
+  empty, notEmpty, isMe, olderThan, changed), `rules` and `actions` with
+  approvals (backend stage 3). `simulate_request` takes `action` + `itemId`.
+  Actions are App API only, so there is no tool that runs one.
 - `rowLevelSecurity.mode: "policy"` on `create_app_endpoint`,
   `update_app_endpoint` and `build_backend` boards. It takes no other field.
 - Docs: "Roles and board policies" in `docs/app-access.md`, a section in the

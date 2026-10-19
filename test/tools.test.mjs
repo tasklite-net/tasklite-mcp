@@ -1222,3 +1222,35 @@ test('tools/list: permissions tools are registered, and set_board_policy carries
   }
   assert.ok(JSON.stringify(byName.get('create_app_endpoint').inputSchema.properties.rowLevelSecurity).includes('"policy"'));
 });
+
+test('simulate_request can try a policy action on a row, and refuses a call with neither method nor action', async () => {
+  let h = await harness();
+  await h.call('simulate_request', { appId: 'crm', userId: 'u1', endpoint: 'cases', action: 'transfer', itemId: 'i1' });
+  assert.deepEqual(h.calls, [{ method: 'POST', path: `${PERM}/simulate`, body: { userId: 'u1', endpoint: 'cases', action: 'transfer', itemId: 'i1' } }]);
+
+  h = await harness();
+  const noItem = await h.call('simulate_request', { appId: 'crm', userId: 'u1', endpoint: 'cases', action: 'transfer' });
+  const nothing = await h.call('simulate_request', { appId: 'crm', userId: 'u1', endpoint: 'cases' });
+  assert.match(noItem.json.error, /itemId/);
+  assert.match(nothing.json.error, /method/);
+  assert.equal(h.calls.length, 0);
+});
+
+test('set_board_policy passes a policy with where scope, rules and actions through unchanged, and its text documents them', async () => {
+  const policy = {
+    ...SAMPLE_POLICY,
+    rows: { ...SAMPLE_POLICY.rows, read: [{ roles: ['manager'], scope: { where: { col: 'updatedAt', op: 'olderThan', days: 3 } } }] },
+    rules: [{ id: 'lock', when: { all: [{ col: 'c-lock', op: 'eq', value: true }] }, deny: { write: '*', except: ['manager'] }, message: 'locked' }],
+    actions: { transfer: { roles: ['manager'], input: { agent: { col: 'col-agent', required: true }, reason: { required: true } }, set: { 'c-lock': false }, event: 'TRANSFER', approval: 'wf1' } },
+  };
+  const { client, calls, call } = await harness();
+  const res = await call('set_board_policy', { appId: 'crm', boardId: 'b1', policy });
+  assert.equal(res.isError, false, res.text);
+  assert.deepEqual(calls[0].body, policy);
+  const { tools } = await client.listTools();
+  const d = tools.find((t) => t.name === 'set_board_policy').description;
+  for (const k of ['olderThan', 'notEmpty', 'isMe', 'changed', '"except"', '"require"', '"approval"', 'TRANSFER', 'UNLOCK', 'actions/<name>', 'me/approvals', 'decide']) {
+    assert.ok(d.includes(k), `description mentions ${k}`);
+  }
+  assert.equal(tools.some((t) => t.name === 'run_app_action'), false);
+});
