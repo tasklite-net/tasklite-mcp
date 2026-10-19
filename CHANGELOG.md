@@ -3,6 +3,27 @@
 All notable changes to `@tasklite/mcp`. Versions that were never published
 are folded into the next published one, so the numbers on npm may skip.
 
+## 0.19.0, 2026-10-19
+
+### Added
+- Roles and board policies (backend: `organizations/:orgId/apps/:appId/permissions`,
+  permissions plan stage 1). Tools: `list_app_roles`, `define_app_role`
+  (creates, or updates the label), `delete_app_role`, `grant_app_role`,
+  `revoke_app_role`, `list_app_role_grants`, `get_policy_identity`,
+  `set_policy_identity`, `get_board_policy`, `set_board_policy` (full replace,
+  the document as an object; the description carries a compact example),
+  `delete_board_policy`, `explain_access`, `simulate_request`.
+- `get_item_history`: the change history of one item (field, from, to, time,
+  actor, channel, event, reason) with `limit` and `before` paging, through the
+  internal route `organizations/:orgId/items/:itemId/history`.
+- `rowLevelSecurity.mode: "policy"` on `create_app_endpoint`,
+  `update_app_endpoint` and `build_backend` boards. It takes no other field.
+- Docs: "Roles and board policies" in `docs/app-access.md`, a section in the
+  skill and in the server instructions.
+
+### Fixed
+- README tool list and count (78 tools, `get_email_usage` was missing).
+
 ## 0.18.0, 2026-10-17
 
 ### Added
