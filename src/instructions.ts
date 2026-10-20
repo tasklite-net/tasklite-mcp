@@ -85,6 +85,25 @@ workaround in the page (a phones board the page syncs from, an invite code
 typed by the owner). list_app_users shows who is on the list (hasAccessRow)
 and who is still waiting; set_app_user_role changes a role or switches a
 user off; remove_app_user takes access away.
+Roles and permissions: when different people of one app must see different
+rows or columns (a manager all cases, an agent only his own, bookkeeping the
+money columns), give the endpoints rowLevelSecurity mode "policy" and the board
+a policy. Roles: define_app_role, grant_app_role (userId from list_app_users),
+revoke_app_role, or set_policy_identity to read them from an employees board.
+Policy: set_board_policy replaces the whole document (get_board_policy first
+to change part of it): rows.read/write [{roles, scope: "all" | {mine: columnId}
+| {created: true}}], rows.create/delete role lists, columns {columnIdOrReserved
+Field: {read, write}} where a list [] locks the column and
+{roles, orMine: columnId} means "or his own rows". Always lock assignedTo with
+{"write": []}. Then prove it with explain_access and simulate_request.
+Beyond roles and columns: scope {where: condition}, write rules (lock a row
+unless the role is exempt) and named actions (transfer, unlock: role-gated,
+validated input, a fixed set of writes, recorded with an event and a reason;
+the only way to change a column locked with []; optional approval workflow).
+Actions are App API only: the frontend calls POST /apps/<slug>/api/<endpoint>/
+<itemId>/actions/<name>, approvers use GET .../me/approvals and POST
+.../approvals/<requestId>/decide. There is no tool that runs one; simulate_request
+with action + itemId checks it. get_item_history reads who changed which field of a row.
 App-level settings (password reset return URLs, account deletion):
 configure_app_settings. Removing an endpoint: delete_app_endpoint.
 

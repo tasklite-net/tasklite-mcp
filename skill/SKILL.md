@@ -67,6 +67,20 @@ only with a code), `configure_app_settings` (reads and merges app settings),
 send every field again. `build_backend` takes the same thing per board, with
 columns by name.
 
+## Roles and permissions
+
+When different people of one app must see different rows or columns (a manager
+sees all, an agent only his own, bookkeeping the money), do not hide things in
+the page. Use mode `policy`: `define_app_role` + `grant_app_role` (or
+`set_policy_identity` to read roles from an employees board), then
+`set_board_policy` (full replace; scopes `all`, `{mine: col}`, `{created:
+true}`; columns by id with `read`/`write` role lists, `orMine` for "his own
+rows", `write: []` to lock; always lock `assignedTo`), then
+`update_app_endpoint` with `rowLevelSecurity: { enabled: true, mode: "policy" }`.
+For a lock or a controlled change add `rules` and `actions` (transfer, unlock, optional `approval`; the only way to change a `write: []` column; run by the frontend through POST /apps/<slug>/api/<endpoint>/<itemId>/actions/<name>, no MCP tool runs them). Prove it with `explain_access` and `simulate_request` before saying it is done.
+`get_item_history` shows who changed what on a row. Full example:
+docs/app-access.md.
+
 ## Automations
 
 `create_automation`, `update_automation`, `list_automations`. The `scheduled`

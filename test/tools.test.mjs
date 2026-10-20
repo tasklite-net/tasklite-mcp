@@ -1026,3 +1026,231 @@ test('create_automation documents the send_email kind, attachments and quotas, a
   }
   assert.ok(tools.some((t) => t.name === 'get_email_usage'));
 });
+
+// ── roles, board policies and history (permissions plan, stage 1) ──
+
+const PERM = `/organizations/${ORG}/apps/crm/permissions`;
+const SAMPLE_POLICY = {
+  schemaVersion: 1,
+  rows: {
+    read: [
+      { roles: ['owner', 'manager', 'bookkeeping'], scope: 'all' },
+      { roles: ['agent'], scope: { mine: 'col-agent' } },
+    ],
+    write: [{ roles: ['agent'], scope: { mine: 'col-agent' } }],
+    create: ['manager'],
+    delete: ['owner'],
+  },
+  columns: {
+    'col-commission': { read: { roles: ['owner'], orMine: 'col-agent' }, write: ['owner'] },
+    assignedTo: { write: [] },
+  },
+};
+const ROLES_ANSWER = (m) => (m === 'GET' ? { roles: [{ key: 'agent', label: 'Agent' }] } : {});
+
+test('RLS_SCHEMA and BUILD_RLS_SCHEMA accept mode "policy" and nothing extra', () => {
+  assert.deepEqual(RLS_SCHEMA.parse({ enabled: true, mode: 'policy' }), { enabled: true, mode: 'policy' });
+  assert.deepEqual(BUILD_RLS_SCHEMA.parse({ mode: 'policy' }), { mode: 'policy' });
+  assert.equal(RLS_SCHEMA.safeParse({ enabled: true, mode: 'policy', policy: {} }).success, false);
+  assert.equal(BUILD_RLS_SCHEMA.safeParse({ mode: 'policy', rules: [] }).success, false);
+  // Fields of the other modes are still refused by the build planner.
+  const board = { name: 'Cases', columns: [{ name: 'Phone', type: 'phone' }] };
+  assert.equal(planBuildRls(board, { mode: 'policy' }, [board]).problems.length, 0);
+  assert.ok(planBuildRls(board, { mode: 'policy', phoneColumn: 'Phone' }, [board]).problems.length > 0);
+});
+
+test('create_app_endpoint passes rowLevelSecurity mode "policy" through', async () => {
+  const { calls, call } = await harness();
+  const res = await call('create_app_endpoint', {
+    appId: 'crm', boardId: 'b1', slug: 'cases', name: 'Cases', exposedColumns: EXPOSED,
+    rowLevelSecurity: { enabled: true, mode: 'policy' },
+  });
+  assert.equal(res.isError, false, res.text);
+  assert.deepEqual(calls[0].body.rowLevelSecurity, { enabled: true, mode: 'policy' });
+});
+
+test('role tools: list, define (create or relabel), delete', async () => {
+  let h = await harness(ROLES_ANSWER);
+  await h.call('list_app_roles', { appId: 'crm' });
+  assert.deepEqual(h.calls, [{ method: 'GET', path: `${PERM}/roles`, body: undefined }]);
+
+  h = await harness(ROLES_ANSWER);
+  await h.call('define_app_role', { appId: 'crm', key: 'manager', label: 'Manager' });
+  assert.deepEqual(h.calls[1], { method: 'POST', path: `${PERM}/roles`, body: { key: 'manager', label: 'Manager' } });
+
+  h = await harness(ROLES_ANSWER);
+  await h.call('define_app_role', { appId: 'crm', key: 'agent', label: 'Field agent' });
+  assert.deepEqual(h.calls[1], { method: 'PATCH', path: `${PERM}/roles/agent`, body: { label: 'Field agent' } });
+
+  h = await harness(ROLES_ANSWER);
+  const same = await h.call('define_app_role', { appId: 'crm', key: 'agent' });
+  assert.match(same.json.error, /already exists/);
+  assert.equal(h.calls.length, 1);
+
+  h = await harness();
+  await h.call('delete_app_role', { appId: 'crm', key: 'agent' });
+  assert.deepEqual(h.calls, [{ method: 'DELETE', path: `${PERM}/roles/agent`, body: undefined }]);
+});
+
+test('grant tools: grant, revoke, list (with and without userId)', async () => {
+  let h = await harness();
+  await h.call('grant_app_role', { appId: 'crm', userId: 'u1', roleKey: 'agent', expiresAt: '2027-01-01T00:00:00Z' });
+  assert.deepEqual(h.calls, [{ method: 'POST', path: `${PERM}/grants`, body: { userId: 'u1', roleKey: 'agent', expiresAt: '2027-01-01T00:00:00Z' } }]);
+
+  h = await harness();
+  await h.call('grant_app_role', { appId: 'crm', userId: 'u1', roleKey: 'agent' });
+  assert.deepEqual(h.calls[0].body, { userId: 'u1', roleKey: 'agent' });
+
+  h = await harness();
+  await h.call('revoke_app_role', { appId: 'crm', userId: 'u1', roleKey: 'agent' });
+  assert.deepEqual(h.calls, [{ method: 'DELETE', path: `${PERM}/grants/u1/agent`, body: undefined }]);
+
+  h = await harness();
+  await h.call('list_app_role_grants', { appId: 'crm' });
+  await h.call('list_app_role_grants', { appId: 'crm', userId: 'u 1' });
+  assert.equal(h.calls[0].path, `${PERM}/grants`);
+  assert.equal(h.calls[1].path, `${PERM}/grants?userId=u%201`);
+});
+
+test('identity tools: get, set (strict shape, sent as the body)', async () => {
+  let h = await harness();
+  await h.call('get_policy_identity', { appId: 'crm' });
+  assert.deepEqual(h.calls, [{ method: 'GET', path: `${PERM}/identity`, body: undefined }]);
+
+  const identity = {
+    board: 'emp', phoneColumn: 'ph', roleColumn: 'pos',
+    roleMap: { Agent: ['agent'], Manager: ['manager'] },
+    activeColumn: 'st', activeValues: ['Active'],
+  };
+  h = await harness();
+  const res = await h.call('set_policy_identity', { appId: 'crm', identity });
+  assert.equal(res.isError, false, res.text);
+  assert.deepEqual(h.calls, [{ method: 'PUT', path: `${PERM}/identity`, body: identity }]);
+
+  h = await harness();
+  const bad = await h.call('set_policy_identity', { appId: 'crm', identity: { ...identity, extra: 1 } });
+  assert.equal(bad.isError, true);
+  assert.equal(h.calls.length, 0);
+});
+
+test('board policy tools: get, set (the document is the body), delete', async () => {
+  let h = await harness();
+  await h.call('get_board_policy', { appId: 'crm', boardId: 'b1' });
+  assert.deepEqual(h.calls, [{ method: 'GET', path: `${PERM}/boards/b1/policy`, body: undefined }]);
+
+  h = await harness();
+  const res = await h.call('set_board_policy', { appId: 'crm', boardId: 'b1', policy: SAMPLE_POLICY });
+  assert.equal(res.isError, false, res.text);
+  assert.deepEqual(h.calls, [{ method: 'PUT', path: `${PERM}/boards/b1/policy`, body: SAMPLE_POLICY }]);
+
+  // A string is not a document.
+  h = await harness();
+  const str = await h.call('set_board_policy', { appId: 'crm', boardId: 'b1', policy: JSON.stringify(SAMPLE_POLICY) });
+  assert.equal(str.isError, true);
+  assert.equal(h.calls.length, 0);
+
+  h = await harness();
+  await h.call('delete_board_policy', { appId: 'crm', boardId: 'b1' });
+  assert.deepEqual(h.calls, [{ method: 'DELETE', path: `${PERM}/boards/b1/policy`, body: undefined }]);
+});
+
+test('set_board_policy returns POLICY_INVALID with its errors list, not retried', async () => {
+  const { TaskLiteApiError } = await import('../dist/api.js');
+  const body = { code: 'POLICY_INVALID', message: 'policy is invalid', errors: ['rows.read[0].roles: unknown role "x"'] };
+  const { calls, call } = await harness(() => {
+    throw new TaskLiteApiError('TaskLite API PUT ... failed (400)', 400, body);
+  });
+  const res = await call('set_board_policy', { appId: 'crm', boardId: 'b1', policy: { schemaVersion: 1, rows: {} } });
+  assert.equal(res.isError, true);
+  assert.deepEqual(res.json, { status: 400, ...body });
+  assert.equal(calls.length, 1);
+});
+
+test('explain_access sends userId or roles, exactly one', async () => {
+  let h = await harness();
+  await h.call('explain_access', { appId: 'crm', boardId: 'b1', userId: 'u1' });
+  assert.deepEqual(h.calls, [{ method: 'POST', path: `${PERM}/explain`, body: { boardId: 'b1', userId: 'u1' } }]);
+
+  h = await harness();
+  await h.call('explain_access', { appId: 'crm', boardId: 'b1', roles: ['agent'] });
+  assert.deepEqual(h.calls[0].body, { boardId: 'b1', roles: ['agent'] });
+
+  h = await harness();
+  const none = await h.call('explain_access', { appId: 'crm', boardId: 'b1' });
+  const both = await h.call('explain_access', { appId: 'crm', boardId: 'b1', userId: 'u1', roles: ['agent'] });
+  assert.match(none.json.error, /exactly one/);
+  assert.match(both.json.error, /exactly one/);
+  assert.equal(h.calls.length, 0);
+});
+
+test('simulate_request sends the request description and nothing it was not given', async () => {
+  let h = await harness();
+  await h.call('simulate_request', { appId: 'crm', userId: 'u1', endpoint: 'cases', method: 'PATCH', itemId: 'i1', bodyKeys: ['assignedTo'] });
+  assert.deepEqual(h.calls, [{ method: 'POST', path: `${PERM}/simulate`, body: { userId: 'u1', endpoint: 'cases', method: 'PATCH', itemId: 'i1', bodyKeys: ['assignedTo'] } }]);
+
+  h = await harness();
+  await h.call('simulate_request', { appId: 'crm', userId: 'u1', endpoint: 'cases', method: 'GET' });
+  assert.deepEqual(h.calls[0].body, { userId: 'u1', endpoint: 'cases', method: 'GET' });
+});
+
+test('get_item_history reads the internal history route with limit and before', async () => {
+  const page = { items: [{ field: 'status', from: 'a', to: 'b' }], nextBefore: 'tok' };
+  let h = await harness(() => page);
+  const res = await h.call('get_item_history', { itemId: 'i1', limit: 20, before: 'tok0' });
+  assert.deepEqual(res.json, page);
+  assert.deepEqual(h.calls, [{ method: 'GET', path: `/organizations/${ORG}/items/i1/history?limit=20&before=tok0`, body: undefined }]);
+
+  h = await harness();
+  await h.call('get_item_history', { itemId: 'i1', organizationId: 'org-2' });
+  assert.equal(h.calls[0].path, '/organizations/org-2/items/i1/history');
+});
+
+test('tools/list: permissions tools are registered, and set_board_policy carries the example', async () => {
+  const { client } = await harness();
+  const { tools } = await client.listTools();
+  const byName = new Map(tools.map((t) => [t.name, t]));
+  for (const name of [
+    'list_app_roles', 'define_app_role', 'delete_app_role', 'grant_app_role', 'revoke_app_role',
+    'list_app_role_grants', 'get_policy_identity', 'set_policy_identity', 'get_board_policy',
+    'set_board_policy', 'delete_board_policy', 'explain_access', 'simulate_request', 'get_item_history',
+  ]) {
+    assert.ok(byName.get(name), `${name} is registered`);
+  }
+  const d = byName.get('set_board_policy').description;
+  for (const k of ['schemaVersion', 'internalBypass', 'orMine', 'mine', '"write": []', 'assignedTo', 'POLICY_INVALID']) {
+    assert.ok(d.includes(k), `set_board_policy description mentions ${k}`);
+  }
+  assert.ok(JSON.stringify(byName.get('create_app_endpoint').inputSchema.properties.rowLevelSecurity).includes('"policy"'));
+});
+
+test('simulate_request can try a policy action on a row, and refuses a call with neither method nor action', async () => {
+  let h = await harness();
+  await h.call('simulate_request', { appId: 'crm', userId: 'u1', endpoint: 'cases', action: 'transfer', itemId: 'i1' });
+  assert.deepEqual(h.calls, [{ method: 'POST', path: `${PERM}/simulate`, body: { userId: 'u1', endpoint: 'cases', action: 'transfer', itemId: 'i1' } }]);
+
+  h = await harness();
+  const noItem = await h.call('simulate_request', { appId: 'crm', userId: 'u1', endpoint: 'cases', action: 'transfer' });
+  const nothing = await h.call('simulate_request', { appId: 'crm', userId: 'u1', endpoint: 'cases' });
+  assert.match(noItem.json.error, /itemId/);
+  assert.match(nothing.json.error, /method/);
+  assert.equal(h.calls.length, 0);
+});
+
+test('set_board_policy passes a policy with where scope, rules and actions through unchanged, and its text documents them', async () => {
+  const policy = {
+    ...SAMPLE_POLICY,
+    rows: { ...SAMPLE_POLICY.rows, read: [{ roles: ['manager'], scope: { where: { col: 'updatedAt', op: 'olderThan', days: 3 } } }] },
+    rules: [{ id: 'lock', when: { all: [{ col: 'c-lock', op: 'eq', value: true }] }, deny: { write: '*', except: ['manager'] }, message: 'locked' }],
+    actions: { transfer: { roles: ['manager'], input: { agent: { col: 'col-agent', required: true }, reason: { required: true } }, set: { 'c-lock': false }, event: 'TRANSFER', approval: 'wf1' } },
+  };
+  const { client, calls, call } = await harness();
+  const res = await call('set_board_policy', { appId: 'crm', boardId: 'b1', policy });
+  assert.equal(res.isError, false, res.text);
+  assert.deepEqual(calls[0].body, policy);
+  const { tools } = await client.listTools();
+  const d = tools.find((t) => t.name === 'set_board_policy').description;
+  for (const k of ['olderThan', 'notEmpty', 'isMe', 'changed', '"except"', '"require"', '"approval"', 'TRANSFER', 'UNLOCK', 'actions/<name>', 'me/approvals', 'decide']) {
+    assert.ok(d.includes(k), `description mentions ${k}`);
+  }
+  assert.equal(tools.some((t) => t.name === 'run_app_action'), false);
+});

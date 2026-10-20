@@ -19,9 +19,9 @@ over.
 > **tasklite.net**, published as `@tasklite/mcp` and as `net.tasklite/mcp` in
 > the MCP registry.
 
-## The 65 tools
+## The 78 tools
 
-65 when installed locally, 60 over the hosted server (the five account tools
+78 when installed locally, 73 over the hosted server (the five account tools
 `sign_up` `connect` `login` `disconnect` `connection_status` exist only
 locally; hosted connections sign in with OAuth). Every tool declares
 `readOnlyHint`, `destructiveHint`, `idempotentHint` and `openWorldHint`, so a
@@ -34,8 +34,9 @@ client can tell what is safe to run unattended.
 | Data | `query_items` `create_item` `update_item` `set_cell` `get_cells` `set_cells_if_unchanged` `delete_item` `search` `fetch` |
 | Comments | `list_comments` `add_comment` `update_comment` `delete_comment` |
 | Files | `request_file_upload` `list_uploaded_files` `revoke_upload_link` |
-| Apps and API | `build_backend` `create_app` `publish_app` `list_apps` `get_app_spec` `create_app_endpoint` `list_app_endpoints` `update_app_endpoint` `delete_app_endpoint` `create_app_api_key` `configure_app_settings` |
+| Apps and API | `build_backend` `create_app` `publish_app` `list_apps` `get_app_spec` `create_app_endpoint` `list_app_endpoints` `update_app_endpoint` `delete_app_endpoint` `create_app_api_key` `configure_app_settings` `get_email_usage` |
 | App users, invites and links | `list_app_users` `add_app_user` `set_app_user_role` `remove_app_user` `create_app_invite` `list_app_invites` `revoke_app_invite` `check_invite_code` `link_app_user` `list_app_user_links` `unlink_app_user` |
+| Roles, policies and history | `list_app_roles` `define_app_role` `delete_app_role` `grant_app_role` `revoke_app_role` `list_app_role_grants` `get_policy_identity` `set_policy_identity` `get_board_policy` `set_board_policy` `delete_board_policy` `explain_access` `simulate_request` `get_item_history` |
 | Frontend hosting | `deploy_frontend` `list_deployments` `get_deployment_files` `rollback_deployment` `get_frontend_prompt` |
 | Automation and push | `create_automation` `update_automation` `list_automations` `push_status` `send_test_push` |
 
@@ -67,6 +68,18 @@ an unknown key is refused, never dropped.
 system and creates the project, the boards, their typed columns including the
 relations between them, sample rows, and a published REST API with a key, in
 one call, instead of a dozen.
+
+### Roles, policies and history
+
+When people in one app may see different things (a manager sees every case, an
+agent only his own, bookkeeping the money columns), an endpoint uses
+`rowLevelSecurity.mode: "policy"` and the board carries a policy:
+`define_app_role` and `grant_app_role` (or `set_policy_identity`, which reads
+the roles from an employees board), then `set_board_policy` with the
+document, then `explain_access` and `simulate_request` to prove it.
+`get_item_history` reads who changed which field of a row, from what to what.
+The tools need a backend with the permissions routes; see
+[docs/app-access.md](docs/app-access.md#roles-and-board-policies).
 
 ## Setup
 

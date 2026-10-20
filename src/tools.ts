@@ -788,6 +788,105 @@ const ANNOTATIONS: Record<string, Record<string, unknown>> = {
     idempotentHint: true,
     openWorldHint: false,
   },
+  list_app_roles: {
+    title: "List an app's roles",
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: true,
+    openWorldHint: false,
+  },
+  define_app_role: {
+    title: "Create or rename an app role",
+    readOnlyHint: false,
+    destructiveHint: false,
+    idempotentHint: true,
+    openWorldHint: false,
+  },
+  delete_app_role: {
+    title: "Delete an app role",
+    readOnlyHint: false,
+    destructiveHint: true,
+    idempotentHint: true,
+    openWorldHint: false,
+  },
+  grant_app_role: {
+    title: "Give a user an app role",
+    readOnlyHint: false,
+    destructiveHint: false,
+    idempotentHint: true,
+    openWorldHint: false,
+  },
+  revoke_app_role: {
+    title: "Take an app role away from a user",
+    readOnlyHint: false,
+    destructiveHint: true,
+    idempotentHint: true,
+    openWorldHint: false,
+  },
+  list_app_role_grants: {
+    title: "List who holds which app role",
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: true,
+    openWorldHint: false,
+  },
+  get_policy_identity: {
+    title: "Read where roles come from in the data",
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: true,
+    openWorldHint: false,
+  },
+  set_policy_identity: {
+    title: "Derive roles from an employees board",
+    readOnlyHint: false,
+    destructiveHint: false,
+    idempotentHint: true,
+    openWorldHint: false,
+  },
+  get_board_policy: {
+    title: "Read a board's access policy",
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: true,
+    openWorldHint: false,
+  },
+  set_board_policy: {
+    title: "Set a board's access policy",
+    readOnlyHint: false,
+    // Replaces the whole stored policy.
+    destructiveHint: true,
+    idempotentHint: true,
+    openWorldHint: false,
+  },
+  delete_board_policy: {
+    title: "Remove a board's access policy",
+    readOnlyHint: false,
+    destructiveHint: true,
+    idempotentHint: true,
+    openWorldHint: false,
+  },
+  explain_access: {
+    title: "Explain what a user or roles may do on a board",
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: true,
+    openWorldHint: false,
+  },
+  simulate_request: {
+    title: "Dry-run an app request for a user",
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: true,
+    openWorldHint: false,
+  },
+  get_item_history: {
+    title: "Read the change history of an item",
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: true,
+    openWorldHint: false,
+  },
 };
 
 // Row-level security of an app endpoint. Up to 0.15 the schema had no `mode`,
@@ -804,7 +903,7 @@ const ANNOTATIONS: Record<string, Record<string, unknown>> = {
 // which field goes with which mode is checked by the server, whose message
 // names the field.
 const RLS_MODE_DESCRIPTION =
-  '"owner" (default): each user sees and edits only the rows they created. "shared": every user authorized on the app (on its access list, or an owner, admin or editor of the organization) sees and edits every row; the mode for an admin screen or a team system. Anyone else who signs in is refused with 403, so put the people who run the app on the list with add_app_user (their phone and a role; it works before their first sign-in). "phone": a user signed in with a code sent to their phone sees and edits only the rows whose phoneColumn holds that phone, e.g. a directory where each person keeps their own card, or the Coaches board itself in a coaching app (each coach reads and edits his own row; a POST writes his verified phone into the row whatever the body says). "relation": each user reaches the rows whose relationColumn points at the row that stands for them, e.g. a Trainees board whose "Coach" relation column points at the Coaches board: a coach sees only his trainees. A relation endpoint never returns the row that IS the user, only rows pointing at it, so expose the identity board itself through a second endpoint in mode "phone". In relation mode a new row is linked to the caller by the server, the link cannot be moved with PATCH, and a user who stands for no row gets an empty list on GET and 403 on POST';
+  '"owner" (default): each user sees and edits only the rows they created. "shared": every user authorized on the app (on its access list, or an owner, admin or editor of the organization) sees and edits every row; the mode for an admin screen or a team system. Anyone else who signs in is refused with 403, so put the people who run the app on the list with add_app_user (their phone and a role; it works before their first sign-in). "phone": a user signed in with a code sent to their phone sees and edits only the rows whose phoneColumn holds that phone, e.g. a directory where each person keeps their own card, or the Coaches board itself in a coaching app (each coach reads and edits his own row; a POST writes his verified phone into the row whatever the body says). "relation": each user reaches the rows whose relationColumn points at the row that stands for them, e.g. a Trainees board whose "Coach" relation column points at the Coaches board: a coach sees only his trainees. A relation endpoint never returns the row that IS the user, only rows pointing at it, so expose the identity board itself through a second endpoint in mode "phone". In relation mode a new row is linked to the caller by the server, the link cannot be moved with PATCH, and a user who stands for no row gets an empty list on GET and 403 on POST. "policy": the endpoint follows the access policy of its board (set_board_policy): business roles (define_app_role and grant_app_role, or set_policy_identity), row scope per role, per-column read and write rules. It takes no other rowLevelSecurity field; the board needs a policy and the users need roles, so test with explain_access and simulate_request';
 
 const RLS_FIELDS = {
   phoneColumn:
@@ -835,7 +934,7 @@ export const RLS_SCHEMA = z
         "true: every request must carry a signed-in user (the token from sign-in, or the app key with X-App-User)",
       ),
     mode: z
-      .enum(["owner", "shared", "phone", "relation"])
+      .enum(["owner", "shared", "phone", "relation", "policy"])
       .optional()
       .describe(RLS_MODE_DESCRIPTION),
     phoneColumn: z
@@ -884,7 +983,7 @@ export const BUILD_RLS_SCHEMA = z
       .optional()
       .describe("Defaults to true; false leaves this endpoint without row-level security"),
     mode: z
-      .enum(["owner", "shared", "phone", "relation"])
+      .enum(["owner", "shared", "phone", "relation", "policy"])
       .optional()
       .describe(RLS_MODE_DESCRIPTION),
     phoneColumn: z
@@ -3562,6 +3661,448 @@ export function registerTools(
         await getApi().request(
           "DELETE",
           `/organizations/${orgId}/apps/${appId}/users/${userId}/links/${itemId}`,
+        ),
+      );
+    },
+  );
+
+  // ── Roles and board policies (permissions plan, stage 1) ───────────────
+  // Roles are per project; endpoints in rowLevelSecurity mode "policy" enforce
+  // what a board policy says. All of the admin routes need organization owner
+  // or admin.
+  const permBase = (orgId: string, appId: string) =>
+    `/organizations/${orgId}/apps/${encodeURIComponent(appId)}/permissions`;
+  // A refused policy comes back as 400 POLICY_INVALID with an errors list
+  // naming each problem; the plain error message keeps only the headline, so
+  // the whole body goes back for the builder to fix from.
+  const policyWrite = async (run: () => Promise<unknown>) => {
+    try {
+      return ok(await run());
+    } catch (e) {
+      if (
+        e instanceof TaskLiteApiError &&
+        e.status === 400 &&
+        e.body &&
+        typeof e.body === "object"
+      ) {
+        return {
+          isError: true,
+          content: [
+            {
+              type: "text" as const,
+              text: JSON.stringify(
+                { status: e.status, ...(e.body as object) },
+                null,
+                2,
+              ),
+            },
+          ],
+        };
+      }
+      throw e;
+    }
+  };
+  const appIdShape = z
+    .string()
+    .describe("App id or slug (from list_apps / create_app)");
+  const orgIdShape = z
+    .string()
+    .optional()
+    .describe(
+      "Organization id; defaults to the credential organization when omitted",
+    );
+  const roleKeyShape = z
+    .string()
+    .describe(
+      'Role key: a short stable id such as "manager" or "agent" (what policies name). Built-in keys: "*" (every signed-in user of the app) and "public" (anonymous visitors); they need no definition and no grant',
+    );
+
+  tool(
+    "list_app_roles",
+    "List the business roles of an app's project, as { roles: [{ key, label }] }. Roles are what board policies (set_board_policy) name in their `roles` lists; they are separate from the app access role (viewer, editor, submitter) of add_app_user. Requires organization owner or admin.",
+    { appId: appIdShape, organizationId: orgIdShape },
+    async ({ appId, organizationId }) => {
+      const orgId = await resolveOrg(organizationId);
+      return ok(await getApi().request("GET", `${permBase(orgId, appId)}/roles`));
+    },
+  );
+
+  tool(
+    "define_app_role",
+    'Create a business role of an app\'s project, or change the label of an existing one (calling again with the same key and a label updates the label). A role is only a name; what it may do is written in the board policies. Example: key "manager", label "Agents manager". Roles can also come from the data itself with set_policy_identity (an employees board with a role column) instead of grant_app_role per person. Requires organization owner or admin.',
+    {
+      appId: appIdShape,
+      key: z
+        .string()
+        .describe('Role key, e.g. "manager". Lowercase letters, digits, dash or underscore are safest; "*" and "public" are built in and cannot be defined'),
+      label: z
+        .string()
+        .optional()
+        .describe('Display name, e.g. "Agents manager". Defaults to the key'),
+      organizationId: orgIdShape,
+    },
+    async ({ appId, key, label, organizationId }) => {
+      const orgId = await resolveOrg(organizationId);
+      const base = permBase(orgId, appId);
+      const listed = await getApi().request<{ roles?: Array<{ key: string }> }>(
+        "GET",
+        `${base}/roles`,
+      );
+      const exists = (listed?.roles ?? []).some((r) => r.key === key);
+      if (exists) {
+        if (label === undefined) {
+          return ok({ error: `Role "${key}" already exists; pass a label to change it.` });
+        }
+        return ok(
+          await getApi().request(
+            "PATCH",
+            `${base}/roles/${encodeURIComponent(key)}`,
+            { label },
+          ),
+        );
+      }
+      return ok(
+        await getApi().request("POST", `${base}/roles`, {
+          key,
+          ...(label !== undefined ? { label } : {}),
+        }),
+      );
+    },
+  );
+
+  tool(
+    "delete_app_role",
+    "Delete a business role of an app's project. Check first with list_app_role_grants who holds it and with get_board_policy where policies still name it: a policy that names a role that no longer exists simply matches nobody. Requires organization owner or admin.",
+    { appId: appIdShape, key: roleKeyShape, organizationId: orgIdShape },
+    async ({ appId, key, organizationId }) => {
+      const orgId = await resolveOrg(organizationId);
+      return ok(
+        await getApi().request(
+          "DELETE",
+          `${permBase(orgId, appId)}/roles/${encodeURIComponent(key)}`,
+        ),
+      );
+    },
+  );
+
+  tool(
+    "grant_app_role",
+    "Give an app user a business role (a user can hold several). Takes the userId from list_app_users and a role key from list_app_roles. expiresAt makes the grant temporary. Granting the same pair again changes only expiresAt. This is for personal exceptions; for a whole team prefer set_policy_identity, which reads the roles from an employees board. Requires organization owner or admin.",
+    {
+      appId: appIdShape,
+      userId: z
+        .string()
+        .describe("The user's id (userId from list_app_users), a UUID"),
+      roleKey: roleKeyShape,
+      expiresAt: z
+        .string()
+        .optional()
+        .describe("ISO 8601 date-time when the grant ends. Omit for no end"),
+      organizationId: orgIdShape,
+    },
+    async ({ appId, userId, roleKey, expiresAt, organizationId }) => {
+      const orgId = await resolveOrg(organizationId);
+      return ok(
+        await getApi().request("POST", `${permBase(orgId, appId)}/grants`, {
+          userId,
+          roleKey,
+          ...(expiresAt !== undefined ? { expiresAt } : {}),
+        }),
+      );
+    },
+  );
+
+  tool(
+    "revoke_app_role",
+    "Take a business role away from an app user (a grant made with grant_app_role). A role the user gets from the employees board (set_policy_identity) is not a grant: change the board row instead. Revoking a grant that does not exist also succeeds. Requires organization owner or admin.",
+    {
+      appId: appIdShape,
+      userId: z
+        .string()
+        .describe("The user's id (userId from list_app_users), a UUID"),
+      roleKey: roleKeyShape,
+      organizationId: orgIdShape,
+    },
+    async ({ appId, userId, roleKey, organizationId }) => {
+      const orgId = await resolveOrg(organizationId);
+      return ok(
+        await getApi().request(
+          "DELETE",
+          `${permBase(orgId, appId)}/grants/${encodeURIComponent(userId)}/${encodeURIComponent(roleKey)}`,
+        ),
+      );
+    },
+  );
+
+  tool(
+    "list_app_role_grants",
+    "List the role grants of an app's project, as { grants }: who holds which role and until when. Pass userId to see one person's. Roles that come from the employees board (set_policy_identity) are not grants and are not listed here; explain_access with a userId shows the roles a person ends up with. Requires organization owner or admin.",
+    {
+      appId: appIdShape,
+      userId: z
+        .string()
+        .optional()
+        .describe("Only this user's grants (userId from list_app_users)"),
+      organizationId: orgIdShape,
+    },
+    async ({ appId, userId, organizationId }) => {
+      const orgId = await resolveOrg(organizationId);
+      const q = userId ? `?userId=${encodeURIComponent(userId)}` : "";
+      return ok(
+        await getApi().request("GET", `${permBase(orgId, appId)}/grants${q}`),
+      );
+    },
+  );
+
+  tool(
+    "get_policy_identity",
+    "Read the project's role identity: which board holds the people and how their rows map to roles (see set_policy_identity). Returns { identity }, null when none is set. Requires organization owner or admin.",
+    { appId: appIdShape, organizationId: orgIdShape },
+    async ({ appId, organizationId }) => {
+      const orgId = await resolveOrg(organizationId);
+      return ok(
+        await getApi().request("GET", `${permBase(orgId, appId)}/identity`),
+      );
+    },
+  );
+
+  tool(
+    "set_policy_identity",
+    'Derive "who is this user and what is their role" from the data, instead of a grant per person: point at the employees board, its phone/email column, the column that says what each person does, and a map from that column\'s values to role keys. A signed-in user whose verified phone (or email) is in a row of that board gets that row\'s roles; a row that is not active gives none. Full replace. Example: { "board": "<Employees board id>", "phoneColumn": "<Phone column id>", "roleColumn": "<Position column id>", "roleMap": { "Agent": ["agent"], "Agents manager": ["manager"], "Owner": ["owner"] }, "activeColumn": "<Status column id>", "activeValues": ["Active"] }. Board and columns are ids (get_board_schema). A grant (grant_app_role) adds to what the board gives. Requires organization owner or admin.',
+    {
+      appId: appIdShape,
+      identity: z
+        .object({
+          board: z.string().describe("Id of the board whose rows stand for people"),
+          phoneColumn: z.string().optional().describe("Phone column id on that board"),
+          emailColumn: z.string().optional().describe("Email column id on that board"),
+          roleColumn: z
+            .string()
+            .describe("Column id whose value says the person's position"),
+          roleMap: z
+            .record(z.array(z.string()))
+            .describe('Value of roleColumn to role keys, e.g. { "Agent": ["agent"] }'),
+          activeColumn: z
+            .string()
+            .optional()
+            .describe("Column id that says whether the person is still active"),
+          activeValues: z
+            .array(z.string())
+            .optional()
+            .describe("Values of activeColumn that count as active"),
+        })
+        .strict(),
+      organizationId: orgIdShape,
+    },
+    async ({ appId, identity, organizationId }) => {
+      const orgId = await resolveOrg(organizationId);
+      return policyWrite(() =>
+        getApi().request("PUT", `${permBase(orgId, appId)}/identity`, identity),
+      );
+    },
+  );
+
+  tool(
+    "get_board_policy",
+    'Read a board\'s access policy: { boardId, policy, updatedAt, updatedBy }, policy null when the board has none. A policy only takes effect on endpoints whose rowLevelSecurity mode is "policy". Requires organization owner or admin.',
+    {
+      appId: appIdShape,
+      boardId: z.string().describe("Board id (from list_boards)"),
+      organizationId: orgIdShape,
+    },
+    async ({ appId, boardId, organizationId }) => {
+      const orgId = await resolveOrg(organizationId);
+      return ok(
+        await getApi().request(
+          "GET",
+          `${permBase(orgId, appId)}/boards/${encodeURIComponent(boardId)}/policy`,
+        ),
+      );
+    },
+  );
+
+  tool(
+    "set_board_policy",
+    `Set who may read, write, create and delete rows of a board, and which columns, as a JSON document (a FULL REPLACE of the board's policy; read get_board_policy first to change part of one). It is enforced on the app's endpoints of this board whose rowLevelSecurity.mode is "policy" (create_app_endpoint / update_app_endpoint). Organization owners, admins and editors using the app are let through unless internalBypass is false. Fields:
+- schemaVersion: 1 (required).
+- internalBypass: default true.
+- rows.read / rows.write: a list of { roles, scope }. scope is "all", { "mine": "<column id>" } (rows whose column points at the caller: a relation to the row that stands for them, their verified phone or email, or a people column; add "via": "<relation column id>" for one more hop), { "created": true } (rows they created through the app) or { "where": CONDITION } (rows a condition selects, e.g. open cases older than 3 days, for an escalation view). A user gets the union of the rules that name any of their roles; no rule for their roles means no access.
+- rows.create / rows.delete: plain role lists.
+- columns: { "<column id or reserved field>": { "read": ACCESS, "write": ACCESS } }. ACCESS is a role list, or { "roles": [...], "orMine": "<column id>" } (these roles, or anyone for whom the row is theirs by that column). A column without an entry follows the row rules. An EMPTY list ("write": []) locks the column for everyone through the app: use it for assignedTo and for any field only an admin or an action may change. Reserved fields are title, description, status, priority, dueDate and assignedTo, addressed by those names. Reserved fields are open to anyone who may write the row unless you lock them, so lock assignedTo.
+- CONDITION (in where, rules.when): { "all": [c...] } | { "any": [c...] } | { "not": c } | a leaf { "col": "<column id or reserved field>", "op": OP, ... }. OP: eq / neq (with "value"), in (value is a list), empty, notEmpty, isMe (the column points at the caller; optional "via"), olderThan (col is updatedAt, createdAt or a date column; give "hours" or "days"), changed (this write sets col; only in rules). No free expressions.
+- rules: [{ "id", "when": CONDITION, "deny": { "write": "*" | [column ids], "except": [roles] }, "require": [column ids that must be filled after the write], "except": [roles], "message" }]. deny is judged on the row as it is BEFORE the write, require AFTER it. Rules bind people acting through the app; internal bypass users and an action's own columns are not held to deny.
+- actions: { "<name>": { "roles": [...], "input": { "<input name>": { "col": "<column id the value is written to>", "required": true } }, "set": { "<column id>": constant }, "event": "TRANSFER", "scope": "write" | "read", "approval": "<approval workflow id of the board>" } }. An action is role-gated, validates its input (an input without col is only data; "reason" is always accepted and goes to the history), writes its set and bound inputs in one transaction, and records event and reason in the history. It is the only way to change a column whose write is []. With approval it files a request for that workflow instead of writing; the write happens when the last step approves. Roles named by approval steps must exist (define_app_role). Actions run through the App API only (see below).
+Frontends run an action with POST /apps/<slug>/api/<endpoint>/<itemId>/actions/<name> and the inputs as the body; approvers read GET /apps/<slug>/api/me/approvals and answer POST /apps/<slug>/api/approvals/<requestId>/decide { "decision": "approve" | "reject", "comment"? }; GET /apps/<slug>/api/me/permissions lists the actions the caller may run as [{ name, allowed, roles, inputs, approval, event, scope }]. There is no MCP tool that runs an action.
+Roles are keys from list_app_roles, plus "*" (any signed-in user) and "public". Column ids come from get_board_schema. An invalid document is refused with POLICY_INVALID and an errors list naming each problem. Example (agents see and edit only their own cases, the manager sees and edits all, bookkeeping reads all, commission is visible to the owner, the manager and to the agent on his own rows):
+{ "schemaVersion": 1,
+  "rows": {
+    "read":  [ { "roles": ["owner","manager","bookkeeping"], "scope": "all" },
+               { "roles": ["agent"], "scope": { "mine": "<agent column id>" } } ],
+    "write": [ { "roles": ["owner","manager"], "scope": "all" },
+               { "roles": ["agent"], "scope": { "mine": "<agent column id>" } } ],
+    "create": ["owner","manager","agent"],
+    "delete": ["owner"] },
+  "columns": {
+    "<commission column id>": { "read": { "roles": ["owner","manager"], "orMine": "<agent column id>" }, "write": ["owner"] },
+    "<agent column id>": { "write": ["owner","manager"] },
+    "assignedTo": { "write": [] } },
+  "rules": [ { "id": "lock", "when": { "all": [ { "col": "<locked column id>", "op": "eq", "value": true } ] },
+               "deny": { "write": "*", "except": ["owner","manager"] }, "message": "The case is locked to its agent" } ],
+  "actions": {
+    "transfer": { "roles": ["owner","manager"], "input": { "agent": { "col": "<agent column id>", "required": true }, "reason": { "required": true } },
+                  "set": { "<locked column id>": false }, "event": "TRANSFER" },
+    "unlock":   { "roles": ["owner","manager"], "input": { "reason": { "required": true } }, "set": { "<locked column id>": false }, "event": "UNLOCK" },
+    "exception": { "roles": ["agent"], "input": { "reason": { "required": true } }, "set": { "<exception column id>": true }, "approval": "<workflow id, a role step>" } } }
+(The Achituv shape: a locked case cannot be edited except by the owner and the manager; transfer and unlock are the only way to change the agent or the lock, with a recorded reason; an exception asks a role step for approval.) Test it with explain_access and simulate_request before telling the user it is done. Requires organization owner or admin.`,
+    {
+      appId: appIdShape,
+      boardId: z.string().describe("Board id (from list_boards)"),
+      policy: z
+        .record(z.unknown())
+        .describe(
+          'The policy document as an object (not a string), e.g. { "schemaVersion": 1, "rows": { ... } }',
+        ),
+      organizationId: orgIdShape,
+    },
+    async ({ appId, boardId, policy, organizationId }) => {
+      const orgId = await resolveOrg(organizationId);
+      return policyWrite(() =>
+        getApi().request(
+          "PUT",
+          `${permBase(orgId, appId)}/boards/${encodeURIComponent(boardId)}/policy`,
+          policy,
+        ),
+      );
+    },
+  );
+
+  tool(
+    "delete_board_policy",
+    'Remove a board\'s access policy. An endpoint of that board in rowLevelSecurity mode "policy" then has no policy to follow; check what it allows afterwards with explain_access before leaving it on a live app. Requires organization owner or admin.',
+    {
+      appId: appIdShape,
+      boardId: z.string().describe("Board id (from list_boards)"),
+      organizationId: orgIdShape,
+    },
+    async ({ appId, boardId, organizationId }) => {
+      const orgId = await resolveOrg(organizationId);
+      return ok(
+        await getApi().request(
+          "DELETE",
+          `${permBase(orgId, appId)}/boards/${encodeURIComponent(boardId)}/policy`,
+        ),
+      );
+    },
+  );
+
+  tool(
+    "explain_access",
+    "Say what a user, or a list of roles, may do on a board under its policy: which rows they read and write, which columns, create and delete. Pass boardId and exactly one of userId (an app user from list_app_users; the answer includes the roles that person has) or roles (role keys, to try a role before anyone holds it). Changes nothing; use it after every set_board_policy. Requires organization owner or admin.",
+    {
+      appId: appIdShape,
+      boardId: z.string().describe("Board id (from list_boards)"),
+      userId: z
+        .string()
+        .optional()
+        .describe("An app user's id (from list_app_users). Pass this or roles"),
+      roles: z
+        .array(z.string())
+        .optional()
+        .describe('Role keys to explain, e.g. ["agent"]. Pass this or userId'),
+      organizationId: orgIdShape,
+    },
+    async ({ appId, boardId, userId, roles, organizationId }) => {
+      if ((userId === undefined) === (roles === undefined)) {
+        return ok({ error: "Pass exactly one of userId and roles." });
+      }
+      const orgId = await resolveOrg(organizationId);
+      return ok(
+        await getApi().request("POST", `${permBase(orgId, appId)}/explain`, {
+          boardId,
+          ...(userId !== undefined ? { userId } : { roles }),
+        }),
+      );
+    },
+  );
+
+  tool(
+    "simulate_request",
+    "Dry-run one app API request in the name of a user and get the verdict (allowed or refused, and why), changing nothing: the endpoint slug, the HTTP method (or the name of a policy action, with its itemId) and optionally the column keys the body would carry. Use it to prove that a forbidden thing is refused (an agent PATCHing assignedTo, reading another agent's row) and an allowed one passes. Requires organization owner or admin.",
+    {
+      appId: appIdShape,
+      userId: z
+        .string()
+        .describe("The app user the request is made as (from list_app_users)"),
+      endpoint: z
+        .string()
+        .describe("Endpoint slug (from list_app_endpoints)"),
+      method: z
+        .enum(["GET", "POST", "PATCH", "PUT", "DELETE"])
+        .optional()
+        .describe("HTTP method of the request. Pass this or action"),
+      action: z
+        .string()
+        .optional()
+        .describe("Name of a policy action to try on itemId (needs itemId) instead of a plain method"),
+      itemId: z
+        .string()
+        .optional()
+        .describe("The row the request is about (PATCH, DELETE, single GET)"),
+      bodyKeys: z
+        .array(z.string())
+        .optional()
+        .describe("Field or column keys the request body would write"),
+      organizationId: orgIdShape,
+    },
+    async ({ appId, userId, endpoint, method, action, itemId, bodyKeys, organizationId }) => {
+      if (!method && !action) {
+        return ok({ error: "Pass method, or action together with itemId." });
+      }
+      if (action && !itemId) {
+        return ok({ error: "An action runs on a row: pass itemId." });
+      }
+      const orgId = await resolveOrg(organizationId);
+      return ok(
+        await getApi().request("POST", `${permBase(orgId, appId)}/simulate`, {
+          userId,
+          endpoint,
+          ...(method !== undefined ? { method } : {}),
+          ...(action !== undefined ? { action } : {}),
+          ...(itemId !== undefined ? { itemId } : {}),
+          ...(bodyKeys !== undefined ? { bodyKeys } : {}),
+        }),
+      );
+    },
+  );
+
+  tool(
+    "get_item_history",
+    "Read the change history of one item (row), newest first: who changed which field, from what to what, when, through which channel, with the event and reason when a named action made the change. Returns { items: [{ field, fieldId, from, to, at, actor: { userId, name }, channel, event, reason }], nextBefore }. Page backwards by passing nextBefore as `before`. Needs access to the item's board.",
+    {
+      itemId: z.string().describe("Item (row) id, from query_items"),
+      limit: z
+        .number()
+        .int()
+        .min(1)
+        .max(200)
+        .optional()
+        .describe("Entries per page (server default when omitted)"),
+      before: z
+        .string()
+        .optional()
+        .describe("The nextBefore of the previous page, to read older entries"),
+      organizationId: orgIdShape,
+    },
+    async ({ itemId, limit, before, organizationId }) => {
+      const orgId = await resolveOrg(organizationId);
+      const q = new URLSearchParams();
+      if (limit !== undefined) q.set("limit", String(limit));
+      if (before !== undefined) q.set("before", before);
+      const qs = q.toString();
+      return ok(
+        await getApi().request(
+          "GET",
+          `/organizations/${orgId}/items/${encodeURIComponent(itemId)}/history${qs ? `?${qs}` : ""}`,
         ),
       );
     },
