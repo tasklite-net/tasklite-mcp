@@ -33,6 +33,30 @@ export interface OnboardingHooks {
 
 // Every tool response funnels through here, which makes this the one place that
 // can guarantee no internal user row leaves the server, see sanitizeUsersDeep.
+/** A signature document as tools show it: no token hashes, no storage keys. */
+function signatureView(doc: Record<string, any>) {
+  return {
+    id: doc?.id,
+    title: doc?.title,
+    status: doc?.status,
+    itemId: doc?.relatedEntityId ?? null,
+    createdAt: doc?.createdAt,
+    sentAt: doc?.sentAt ?? null,
+    completedAt: doc?.completedAt ?? null,
+    expiresAt: doc?.expiresAt,
+    signers: (Array.isArray(doc?.signers) ? doc.signers : []).map((s: any) => ({
+      id: s.id,
+      name: s.name,
+      email: s.email,
+      order: s.signingOrder,
+      status: s.status,
+      viewedAt: s.viewedAt ?? null,
+      signedAt: s.signedAt ?? null,
+      declinedAt: s.declinedAt ?? null,
+    })),
+  };
+}
+
 function ok(data: unknown): { content: Array<{ type: "text"; text: string }> } {
   return {
     content: [
@@ -529,6 +553,42 @@ const ANNOTATIONS: Record<string, Record<string, unknown>> = {
     // The link works without a TaskLite account, and the invitation leaves as
     // an email, so the effect reaches outside the workspace.
     openWorldHint: true,
+  },
+  create_signature_request: {
+    title: "Send a PDF for signature",
+    readOnlyHint: false,
+    destructiveHint: false,
+    idempotentHint: false,
+    // Invitations and signed copies leave as email to people outside the workspace.
+    openWorldHint: true,
+  },
+  list_signature_requests: {
+    title: "List documents sent for signature",
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: true,
+    openWorldHint: false,
+  },
+  get_signature_request: {
+    title: "Read a signature request",
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: true,
+    openWorldHint: false,
+  },
+  signature_link: {
+    title: "Fresh signing link",
+    readOnlyHint: false,
+    destructiveHint: false,
+    idempotentHint: false,
+    openWorldHint: true,
+  },
+  void_signature_request: {
+    title: "Cancel a signature request",
+    readOnlyHint: false,
+    destructiveHint: true,
+    idempotentHint: true,
+    openWorldHint: false,
   },
   list_uploaded_files: {
     title: "List files on an item",
@@ -2815,6 +2875,250 @@ export function registerTools(
             }
           : {}),
       });
+    },
+  );
+
+  tool(
+    "create_signature_request",
+    "Send a PDF for electronic signature and get the signing links back. One call: the PDF (an attachment already on an item, see list_uploaded_files / request_file_upload, or the bytes as base64), the signers, and optionally the row it belongs to. Each signer opens a personal link with an expiry, confirms a one-time code sent to their email or WhatsApp, reads the document and signs; the platform then seals the PDF with an evidence page and emails every signer the signed copy. With no fields, a signature page (name, signature, date per signer) is added at the end, so \"read, then sign at the end\" needs no coordinates. With itemId and signedFileColumnId (a file column on that item's board), the signed PDF is added to that cell when everyone has signed: build what happens next as an automation on \"column value changed\" of that column (set a status, notify, webhook). sendEmail=false skips the invitation emails and the links are yours to hand over (WhatsApp, open on the agent's phone). For a customer app the same thing is in its own API: /api/_esign (script /api/_esign/sign, TaskLiteSign).",
+    {
+      title: z.string().min(1).max(255).describe("Document title, shown to signers"),
+      message: z
+        .string()
+        .max(2000)
+        .optional()
+        .describe("A note shown in the invitation and on the signing page"),
+      pdfAttachmentId: z
+        .string()
+        .optional()
+        .describe("Attachment id of a PDF already uploaded (list_uploaded_files)"),
+      pdfBase64: z.string().optional().describe("Or the PDF itself, base64 (up to 10MB)"),
+      fileName: z.string().optional().describe("File name for pdfBase64"),
+      signers: z
+        .array(
+          z.object({
+            name: z.string().min(1),
+            email: z
+              .string()
+              .email()
+              .describe("Required: the code (unless WhatsApp) and the signed copy go here"),
+            phone: z.string().optional().describe("E.164, for a WhatsApp code"),
+            order: z
+              .number()
+              .int()
+              .min(1)
+              .optional()
+              .describe(
+                "Signing order; equal orders sign in parallel, later orders are invited when earlier ones finish",
+              ),
+          }),
+        )
+        .min(1)
+        .max(20),
+      fields: z
+        .array(
+          z.object({
+            signer: z.number().int().min(0).describe("Index into signers"),
+            type: z.enum(["signature", "initials", "date_signed", "full_name", "text", "checkbox"]),
+            pageIndex: z.number().int().min(0),
+            x: z.number().min(0).max(1).describe("Fraction of page width from the left"),
+            y: z.number().min(0).max(1).describe("Fraction of page height from the top"),
+            width: z.number().min(0.001).max(1),
+            height: z.number().min(0.001).max(1),
+            required: z.boolean().optional(),
+          }),
+        )
+        .optional()
+        .describe("Where each signer signs. Omit to append a signature page"),
+      itemId: z.string().optional().describe("The row this document belongs to"),
+      signedFileColumnId: z
+        .string()
+        .optional()
+        .describe("File column on the item's board that receives the signed PDF"),
+      expiryDays: z
+        .number()
+        .int()
+        .min(1)
+        .max(90)
+        .optional()
+        .describe("How long the links work. Default 14"),
+      sendEmail: z
+        .boolean()
+        .optional()
+        .describe("Email invitations. Default true; links are returned either way"),
+      sendSignedCopy: z
+        .boolean()
+        .optional()
+        .describe("Email every signer the signed copy at the end. Default true"),
+      organizationId: z
+        .string()
+        .optional()
+        .describe("Organization id; defaults to the credential organization when omitted"),
+    },
+    async (a: {
+      title: string;
+      message?: string;
+      pdfAttachmentId?: string;
+      pdfBase64?: string;
+      fileName?: string;
+      signers: Array<{ name: string; email: string; phone?: string; order?: number }>;
+      fields?: unknown[];
+      itemId?: string;
+      signedFileColumnId?: string;
+      expiryDays?: number;
+      sendEmail?: boolean;
+      sendSignedCopy?: boolean;
+      organizationId?: string;
+    }) => {
+      if (!a.pdfAttachmentId && !a.pdfBase64) {
+        throw new Error("Give pdfAttachmentId (a PDF already uploaded) or pdfBase64.");
+      }
+      const orgId = await resolveOrg(a.organizationId);
+      const created = await getApi().request<Record<string, unknown>>(
+        "POST",
+        `/api/e-signature/requests?organizationId=${orgId}`,
+        {
+          title: a.title,
+          message: a.message,
+          pdf: a.pdfAttachmentId
+            ? { attachmentId: a.pdfAttachmentId }
+            : { base64: a.pdfBase64, fileName: a.fileName },
+          signers: a.signers,
+          fields: a.fields,
+          itemId: a.itemId,
+          signedFileColumnId: a.signedFileColumnId,
+          expiryDays: a.expiryDays,
+          sendEmail: a.sendEmail,
+          sendSignedCopy: a.sendSignedCopy,
+        },
+      );
+      return ok({
+        ...created,
+        note: "A signUrl is personal: whoever opens it signs as that signer after the code. A signer with signUrl null waits for an earlier group and is emailed when it is their turn; signature_link mints a fresh link once it is.",
+      });
+    },
+  );
+
+  tool(
+    "list_signature_requests",
+    "Documents sent for signature, newest first, with each signer's state (sent, viewed, signed, declined). Filter by the row they belong to or by status (out_for_signature, completed, declined, voided, expired, failed).",
+    {
+      itemId: z.string().optional().describe("Only documents tied to this row"),
+      status: z.string().optional(),
+      organizationId: z
+        .string()
+        .optional()
+        .describe("Organization id; defaults to the credential organization when omitted"),
+    },
+    async ({
+      itemId,
+      status,
+      organizationId,
+    }: {
+      itemId?: string;
+      status?: string;
+      organizationId?: string;
+    }) => {
+      const orgId = await resolveOrg(organizationId);
+      const q = new URLSearchParams({ organizationId: orgId });
+      if (itemId) q.set("relatedEntityId", itemId);
+      if (status) q.set("status", status);
+      const docs = await getApi().request<Array<Record<string, any>>>(
+        "GET",
+        `/api/e-signature/documents?${q.toString()}`,
+      );
+      return ok((Array.isArray(docs) ? docs : []).map(signatureView));
+    },
+  );
+
+  tool(
+    "get_signature_request",
+    "One document sent for signature: status, signers and their state, and when complete a short-lived download URL of the signed PDF (with its evidence page).",
+    {
+      documentId: z.string(),
+      organizationId: z
+        .string()
+        .optional()
+        .describe("Organization id; defaults to the credential organization when omitted"),
+    },
+    async ({ documentId, organizationId }: { documentId: string; organizationId?: string }) => {
+      const orgId = await resolveOrg(organizationId);
+      const doc = await getApi().request<Record<string, any>>(
+        "GET",
+        `/api/e-signature/documents/${documentId}?organizationId=${orgId}`,
+      );
+      const view = signatureView(doc);
+      if (doc?.finalS3Key) {
+        const signed = await getApi()
+          .request<{ url: string }>(
+            "GET",
+            `/api/e-signature/documents/${documentId}/final?organizationId=${orgId}`,
+          )
+          .catch(() => null);
+        return ok({ ...view, signedFileUrl: signed?.url ?? null });
+      }
+      return ok(view);
+    },
+  );
+
+  tool(
+    "signature_link",
+    "A fresh signing link for one signer whose turn it is, to open on the spot (the agent's phone) or to send yourself. Their previous link stops working.",
+    {
+      documentId: z.string(),
+      signerId: z.string().describe("From create_signature_request / get_signature_request"),
+      organizationId: z
+        .string()
+        .optional()
+        .describe("Organization id; defaults to the credential organization when omitted"),
+    },
+    async ({
+      documentId,
+      signerId,
+      organizationId,
+    }: {
+      documentId: string;
+      signerId: string;
+      organizationId?: string;
+    }) => {
+      const orgId = await resolveOrg(organizationId);
+      return ok(
+        await getApi().request(
+          "POST",
+          `/api/e-signature/requests/${documentId}/link?organizationId=${orgId}`,
+          { signerId },
+        ),
+      );
+    },
+  );
+
+  tool(
+    "void_signature_request",
+    "Cancel a document that is out for signature: every link stops working. A completed document cannot be voided.",
+    {
+      documentId: z.string(),
+      reason: z.string().min(1).max(500),
+      organizationId: z
+        .string()
+        .optional()
+        .describe("Organization id; defaults to the credential organization when omitted"),
+    },
+    async ({
+      documentId,
+      reason,
+      organizationId,
+    }: {
+      documentId: string;
+      reason: string;
+      organizationId?: string;
+    }) => {
+      const orgId = await resolveOrg(organizationId);
+      const doc = await getApi().request<Record<string, any>>(
+        "POST",
+        `/api/e-signature/documents/${documentId}/void?organizationId=${orgId}`,
+        { reason },
+      );
+      return ok(signatureView(doc));
     },
   );
 
