@@ -3,6 +3,14 @@
 All notable changes to `@tasklite/mcp`. Versions that were never published
 are folded into the next published one, so the numbers on npm may skip.
 
+## Unreleased
+
+### Changed
+- `create_automation` and `update_automation` descriptions (and the action `config`
+  field) now spell out the config of `send_whatsapp` (phoneColumnId,
+  messageTemplate, retry), `start_lead_conversation` (phoneColumnId) and the full
+  `send_email` config, with one example each.
+
 ## 0.19.0, 2026-10-19
 
 ### Added

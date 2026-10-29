@@ -1027,6 +1027,17 @@ test('create_automation documents the send_email kind, attachments and quotas, a
   assert.ok(tools.some((t) => t.name === 'get_email_usage'));
 });
 
+test('create_automation and update_automation document the WhatsApp and email action configs', async () => {
+  const { client } = await harness();
+  const tools = (await client.listTools()).tools;
+  for (const name of ['create_automation', 'update_automation']) {
+    const d = tools.find((x) => x.name === name).description;
+    for (const needle of ['phoneColumnId', 'messageTemplate', 'start_lead_conversation', 'columnEmailField', 'NOT read', 'no connected number']) {
+      assert.ok(d.includes(needle), `${name} missing ${needle}`);
+    }
+  }
+});
+
 // ── roles, board policies and history (permissions plan, stage 1) ──
 
 const PERM = `/organizations/${ORG}/apps/crm/permissions`;
