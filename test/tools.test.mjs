@@ -1304,3 +1304,29 @@ test('get_signature_request never shows token hashes or storage keys', async () 
   assert.ok(!res.text.includes('accessTokenHash'));
   assert.ok(!res.text.includes('finalS3Key'));
 });
+
+// ── App AI actions ───────────────────────────────────────────────────────────
+
+test('create_app_api_key accepts the "ai" scope and sends it as given', async () => {
+  const { calls, call } = await harness();
+  const res = await call('create_app_api_key', { appId: 'app-1', name: 'AI from my server', scopes: ['ai'] });
+  assert.equal(res.isError, false, res.text);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].method, 'POST');
+  assert.deepEqual(calls[0].body.scopes, ['ai']);
+});
+
+test('create_app_api_key still refuses an unknown scope before any request', async () => {
+  const { calls, call } = await harness();
+  const res = await call('create_app_api_key', { appId: 'app-1', scopes: ['admin'] });
+  assert.equal(res.isError, true);
+  assert.equal(calls.length, 0);
+});
+
+test('configure_app_settings documents the ai actions the server reads', async () => {
+  const { client } = await harness();
+  const { tools } = await client.listTools();
+  const settings = tools.find((t) => t.name === 'configure_app_settings');
+  assert.match(settings.description, /_ai\/v1\/run/);
+  assert.match(settings.description, /usage allowance/);
+});
