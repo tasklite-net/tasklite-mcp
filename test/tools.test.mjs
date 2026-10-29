@@ -1254,3 +1254,53 @@ test('set_board_policy passes a policy with where scope, rules and actions throu
   }
   assert.equal(tools.some((t) => t.name === 'run_app_action'), false);
 });
+
+// ── E-signature ──────────────────────────────────────────────────────────────
+test('create_signature_request sends an attachment, signers and the row in one call', async () => {
+  const { calls, call } = await harness(() => ({ id: 'doc-1', status: 'out_for_signature', links: [] }));
+  const res = await call('create_signature_request', {
+    title: 'Brokerage agreement',
+    pdfAttachmentId: 'att-1',
+    signers: [{ name: 'Dana', email: 'dana@example.com' }],
+    itemId: 'item-1',
+    signedFileColumnId: 'col-file',
+    sendEmail: false,
+  });
+  assert.equal(res.isError, false, res.text);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].method, 'POST');
+  assert.equal(calls[0].path, `/api/e-signature/requests?organizationId=${ORG}`);
+  assert.deepEqual(calls[0].body.pdf, { attachmentId: 'att-1' });
+  assert.equal(calls[0].body.itemId, 'item-1');
+  assert.equal(calls[0].body.signedFileColumnId, 'col-file');
+  assert.equal(calls[0].body.sendEmail, false);
+  assert.equal(res.json.id, 'doc-1');
+});
+
+test('create_signature_request refuses without a PDF, before any request', async () => {
+  const { calls, call } = await harness();
+  const res = await call('create_signature_request', {
+    title: 'No file',
+    signers: [{ name: 'Dana', email: 'dana@example.com' }],
+  });
+  assert.equal(res.isError, true);
+  assert.equal(calls.length, 0);
+});
+
+test('get_signature_request never shows token hashes or storage keys', async () => {
+  const { call } = await harness((method, path) =>
+    path.includes('/final')
+      ? { url: 'https://signed.example/x' }
+      : {
+          id: 'doc-1',
+          status: 'completed',
+          finalS3Key: 'organizations/o/esign/final.pdf',
+          signers: [{ id: 's1', name: 'Dana', email: 'd@x.co', accessTokenHash: 'h', otpCodeHash: 'h', status: 'signed' }],
+        },
+  );
+  const res = await call('get_signature_request', { documentId: 'doc-1' });
+  assert.equal(res.isError, false, res.text);
+  assert.equal(res.json.signedFileUrl, 'https://signed.example/x');
+  assert.ok(!res.text.includes('accessTokenHash'));
+  assert.ok(!res.text.includes('finalS3Key'));
+});

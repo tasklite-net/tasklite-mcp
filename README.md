@@ -34,6 +34,7 @@ client can tell what is safe to run unattended.
 | Data | `query_items` `create_item` `update_item` `set_cell` `get_cells` `set_cells_if_unchanged` `delete_item` `search` `fetch` |
 | Comments | `list_comments` `add_comment` `update_comment` `delete_comment` |
 | Files | `request_file_upload` `list_uploaded_files` `revoke_upload_link` |
+| Signatures | `create_signature_request` `list_signature_requests` `get_signature_request` `signature_link` `void_signature_request` |
 | Apps and API | `build_backend` `create_app` `publish_app` `list_apps` `get_app_spec` `create_app_endpoint` `list_app_endpoints` `update_app_endpoint` `delete_app_endpoint` `create_app_api_key` `configure_app_settings` `get_email_usage` |
 | App users, invites and links | `list_app_users` `add_app_user` `set_app_user_role` `remove_app_user` `create_app_invite` `list_app_invites` `revoke_app_invite` `check_invite_code` `link_app_user` `list_app_user_links` `unlink_app_user` |
 | Roles, policies and history | `list_app_roles` `define_app_role` `delete_app_role` `grant_app_role` `revoke_app_role` `list_app_role_grants` `get_policy_identity` `set_policy_identity` `get_board_policy` `set_board_policy` `delete_board_policy` `explain_access` `simulate_request` `get_item_history` |
