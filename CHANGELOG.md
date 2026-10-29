@@ -3,6 +3,17 @@
 All notable changes to `@tasklite/mcp`. Versions that were never published
 are folded into the next published one, so the numbers on npm may skip.
 
+## 0.21.0, 2026-10-29
+
+### Added
+- AI actions in apps (backend `/apps/<slug>/api/_ai/v1`). `configure_app_settings`
+  documents `settings.ai` (named actions: instructions, inputs, text or JSON
+  with a schema), how a page runs one with the signed-in user's token, and
+  that runs are charged to the owner's usage allowance. `create_app_api_key`
+  accepts the `"ai"` scope for running actions from an app's server; `"write"`
+  does not include it. The server instructions say to never put a model key
+  in an app.
+
 ## 0.19.0, 2026-10-19
 
 ### Added

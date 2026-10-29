@@ -74,6 +74,16 @@ a coach invites from inside the app), by link_app_user (ids from
 list_app_users), or by a verified phone or email written in the row.
 rowLevelSecurity is replaced whole on update and takes only the listed keys.
 
+AI inside an app (summarize, classify, extract fields, draft text): define
+named actions in the app's settings with configure_app_settings, set
+{ ai: { enabled: true, actions: { "<name>": { instructions, inputs, output } } } },
+and call POST /apps/<slug>/api/_ai/v1/run { action, input } with the signed-in
+user's token. The model and its key are TaskLite's: never put a model API key
+in an app and never call a model provider from a page. Output "json" with a
+schema returns parsed data. Runs are charged to the owner's usage allowance;
+show the error's messageHe/message on 429. An app without sign-in cannot run
+AI actions.
+
 An admin screen (the owner and staff manage the data behind a login): put its
 endpoints in mode shared, sign people in by phone code, and call the API at
 https://api.tasklite.net with Authorization: Bearer <the token from
