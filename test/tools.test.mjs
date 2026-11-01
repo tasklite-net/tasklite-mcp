@@ -1265,8 +1265,10 @@ test('create_signature_request sends an attachment, signers and the row in one c
     itemId: 'item-1',
     signedFileColumnId: 'col-file',
     sendEmail: false,
+    cc: ['office@example.com'],
   });
   assert.equal(res.isError, false, res.text);
+  assert.deepEqual(calls[0].body.cc, ['office@example.com']);
   assert.equal(calls.length, 1);
   assert.equal(calls[0].method, 'POST');
   assert.equal(calls[0].path, `/api/e-signature/requests?organizationId=${ORG}`);
