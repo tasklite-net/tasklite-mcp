@@ -2950,6 +2950,11 @@ export function registerTools(
         .boolean()
         .optional()
         .describe("Email every signer the signed copy at the end. Default true"),
+      cc: z
+        .array(z.string().email())
+        .max(10)
+        .optional()
+        .describe("People who get the signed copy by email without signing (the office, a manager)"),
       organizationId: z
         .string()
         .optional()
@@ -2968,6 +2973,7 @@ export function registerTools(
       expiryDays?: number;
       sendEmail?: boolean;
       sendSignedCopy?: boolean;
+      cc?: string[];
       organizationId?: string;
     }) => {
       if (!a.pdfAttachmentId && !a.pdfBase64) {
@@ -2990,6 +2996,7 @@ export function registerTools(
           expiryDays: a.expiryDays,
           sendEmail: a.sendEmail,
           sendSignedCopy: a.sendSignedCopy,
+          cc: a.cc,
         },
       );
       return ok({
