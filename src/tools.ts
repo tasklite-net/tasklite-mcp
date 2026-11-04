@@ -5712,11 +5712,13 @@ Roles are keys from list_app_roles, plus "*" (any signed-in user) and "public". 
       "The bundle has no index.html at its root. Pass the build OUTPUT (dist/, build/, out/), not the project source.",
     );
   };
-  const MAX_BUNDLE = 50 * 1024 * 1024;
+  // The hosting takes 95 MB packed (a copied WordPress site with its pages and scripts), under the 100 MB a request
+  // through Cloudflare may carry.
+  const MAX_BUNDLE = 95 * 1024 * 1024;
   const checkBundleSize = (n: number) => {
     if (n > MAX_BUNDLE) {
       throw new Error(
-        `Bundle is ${Math.round(n / 1024 / 1024)}MB zipped, the limit is 50MB. Static frontends should not embed large media; upload those as attachments instead.`,
+        `Bundle is ${Math.round(n / 1024 / 1024)}MB zipped, the limit is 95MB. Static frontends should not embed large media; upload those as attachments instead.`,
       );
     }
   };
@@ -5757,7 +5759,7 @@ Roles are keys from list_app_roles, plus "*" (any signed-in user) and "public". 
         .url()
         .optional()
         .describe(
-          "Public https URL of a zip of the BUILD OUTPUT (index.html at the root, or inside a single top-level folder). Up to 50MB",
+          "Public https URL of a zip of the BUILD OUTPUT (index.html at the root, or inside a single top-level folder). Up to 95MB",
         ),
       dir: z
         .string()
@@ -5869,7 +5871,7 @@ Roles are keys from list_app_roles, plus "*" (any signed-in user) and "public". 
           total += data.length;
           if (total > 8 * 1024 * 1024) {
             throw new Error(
-              "Inline files exceed 8MB decoded. Build the site and pass a zipUrl (up to 50MB), or keep media out of the bundle.",
+              "Inline files exceed 8MB decoded. Build the site and pass a zipUrl (up to 95MB), or keep media out of the bundle.",
             );
           }
           zip.addFile(rel, data);

@@ -1981,7 +1981,7 @@
           "zipUrl": {
             "type": "string",
             "format": "uri",
-            "description": "Public https URL of a zip of the BUILD OUTPUT (index.html at the root, or inside a single top-level folder). Up to 50MB"
+            "description": "Public https URL of a zip of the BUILD OUTPUT (index.html at the root, or inside a single top-level folder). Up to 95MB"
           },
           "dir": {
             "type": "string",
