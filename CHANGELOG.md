@@ -19,6 +19,9 @@ are folded into the next published one, so the numbers on npm may skip.
   where the customer pastes their monday.com token, so it never goes through
   the chat; the server checks it with monday and stores it encrypted (needs
   the backend with `/integrations/monday`).
+- `list_monday_boards`, `import_monday`, `monday_import_status`: move the
+  connected boards in (groups, columns, rows, sub-items, updates as comments,
+  automations), in the background, with a report of what was skipped.
 
 ### Changed
 - `create_column` says a date range (a monday.com timeline) is two date

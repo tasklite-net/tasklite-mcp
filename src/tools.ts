@@ -606,6 +606,29 @@ const ANNOTATIONS: Record<string, Record<string, unknown>> = {
     idempotentHint: true,
     openWorldHint: false,
   },
+  list_monday_boards: {
+    title: "List the customer's monday.com boards",
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: true,
+    // Reads the customer's monday account.
+    openWorldHint: true,
+  },
+  import_monday: {
+    title: "Move monday.com boards in",
+    readOnlyHint: false,
+    destructiveHint: false,
+    // Each call makes new boards.
+    idempotentHint: false,
+    openWorldHint: true,
+  },
+  monday_import_status: {
+    title: "monday.com import progress",
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: true,
+    openWorldHint: false,
+  },
   create_signature_request: {
     title: "Send a PDF for signature",
     readOnlyHint: false,
@@ -3747,6 +3770,106 @@ export function registerTools(
         await getApi().request(
           "POST",
           `/integrations/monday/disconnect?organizationId=${orgId}`,
+        ),
+      );
+    },
+  );
+
+  tool(
+    "list_monday_boards",
+    "The customer's monday.com boards (after connect_monday), with how many rows each has, to agree with the customer which ones to move.",
+    {
+      organizationId: z
+        .string()
+        .optional()
+        .describe(
+          "Organization id; defaults to the credential organization when omitted",
+        ),
+    },
+    async ({ organizationId }: { organizationId?: string }) => {
+      const orgId = await resolveOrg(organizationId);
+      return ok(
+        await getApi().request(
+          "GET",
+          `/integrations/monday/boards?organizationId=${orgId}`,
+        ),
+      );
+    },
+  );
+
+  tool(
+    "import_monday",
+    "Move monday.com boards into TaskLite with the connected token: each board's groups, columns, rows, sub-items, updates (as comments) and automations. Runs in the background and returns at once; follow it with monday_import_status. A monday timeline becomes two date columns, people and formulas come over as text, files are not moved. Read the report back to the customer, including what was skipped and why.",
+    {
+      boardIds: z
+        .array(z.string())
+        .min(1)
+        .max(50)
+        .describe("monday board ids, from list_monday_boards"),
+      projectId: z
+        .string()
+        .uuid()
+        .optional()
+        .describe("Put the boards in this project; omit to make a new one"),
+      projectName: z
+        .string()
+        .max(200)
+        .optional()
+        .describe('Name of the new project (default "monday.com")'),
+      includeUpdates: z
+        .boolean()
+        .optional()
+        .describe("Bring item updates over as comments (default true)"),
+      includeAutomations: z
+        .boolean()
+        .optional()
+        .describe("Translate the board automations (default true)"),
+      organizationId: z
+        .string()
+        .optional()
+        .describe(
+          "Organization id; defaults to the credential organization when omitted",
+        ),
+    },
+    async ({
+      organizationId,
+      ...body
+    }: {
+      boardIds: string[];
+      projectId?: string;
+      projectName?: string;
+      includeUpdates?: boolean;
+      includeAutomations?: boolean;
+      organizationId?: string;
+    }) => {
+      const orgId = await resolveOrg(organizationId);
+      return ok(
+        await getApi().request(
+          "POST",
+          `/integrations/monday/import?organizationId=${orgId}`,
+          body,
+        ),
+      );
+    },
+  );
+
+  tool(
+    "monday_import_status",
+    "Progress and report of the last monday.com import: state (running, done, failed, interrupted), and per board what was created, which columns and automations were skipped and why, and rows saved without some cells.",
+    {
+      organizationId: z
+        .string()
+        .optional()
+        .describe(
+          "Organization id; defaults to the credential organization when omitted",
+        ),
+    },
+    async ({ organizationId }: { organizationId?: string }) => {
+      const orgId = await resolveOrg(organizationId);
+      return ok(
+        await getApi().request(
+          "GET",
+          `/integrations/monday/import?organizationId=${orgId}`,
         ),
       );
     },

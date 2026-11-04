@@ -1628,3 +1628,28 @@ test('connect_monday tells the agent never to ask for the token in the chat', as
   const t = tools.find((x) => x.name === 'connect_monday');
   assert.match(t.description, /never ask for the token in the chat/);
 });
+
+test('import_monday posts the boards and options to the organization import route', async () => {
+  const { calls, call } = await harness((m, p) =>
+    m === 'POST' && p.startsWith('/integrations/monday/import') ? { importId: 'x', state: 'running' } : {},
+  );
+  const res = await call('import_monday', {
+    boardIds: ['2969049757'],
+    projectName: 'From monday',
+    includeUpdates: false,
+    organizationId: 'org-1',
+  });
+  assert.equal(res.isError, false, res.text);
+  const post = calls.find((c) => c.method === 'POST');
+  assert.equal(post.path, '/integrations/monday/import?organizationId=org-1');
+  assert.deepEqual(post.body, { boardIds: ['2969049757'], projectName: 'From monday', includeUpdates: false });
+  assert.equal(res.json.state, 'running');
+});
+
+test('list_monday_boards and monday_import_status read their routes', async () => {
+  const { calls, call } = await harness(() => ({}));
+  await call('list_monday_boards', { organizationId: 'org-1' });
+  await call('monday_import_status', { organizationId: 'org-1' });
+  assert.ok(calls.some((c) => c.method === 'GET' && c.path === '/integrations/monday/boards?organizationId=org-1'));
+  assert.ok(calls.some((c) => c.method === 'GET' && c.path === '/integrations/monday/import?organizationId=org-1'));
+});

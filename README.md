@@ -34,7 +34,7 @@ client can tell what is safe to run unattended.
 | Data | `query_items` `create_item` `update_item` `set_cell` `get_cells` `set_cells_if_unchanged` `delete_item` `search` `fetch` |
 | Comments | `list_comments` `add_comment` `update_comment` `delete_comment` |
 | Files | `request_file_upload` `list_uploaded_files` `revoke_upload_link` |
-| monday.com migration | `connect_monday` `monday_status` `disconnect_monday` |
+| monday.com migration | `connect_monday` `monday_status` `disconnect_monday` `list_monday_boards` `import_monday` `monday_import_status` |
 | Signatures | `create_signature_request` `list_signature_requests` `get_signature_request` `signature_link` `void_signature_request` |
 | Phone systems (PBX) | `list_telephony_providers` `get_telephony_connection` `start_telephony_connection` `test_telephony_connection` `configure_telephony_mapping` `preview_telephony_sync` `run_telephony_sync` `disconnect_telephony` |
 | Apps and API | `build_backend` `create_app` `publish_app` `list_apps` `get_app_spec` `create_app_endpoint` `list_app_endpoints` `update_app_endpoint` `delete_app_endpoint` `create_app_api_key` `configure_app_settings` `get_email_usage` |
