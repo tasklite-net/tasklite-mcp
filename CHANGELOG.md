@@ -3,6 +3,26 @@
 All notable changes to `@tasklite/mcp`. Versions that were never published
 are folded into the next published one, so the numbers on npm may skip.
 
+## 0.23.0, 2026-11-05
+
+### Added
+- Groups inside a board (monday.com groups; "sections" in the API):
+  `list_groups`, `create_group`, `update_group`, `delete_group`. Deleting a
+  group keeps its rows, under no group.
+- `create_item` takes `groupId` and `parentId` (a sub-item of another row on
+  the same board); `update_item` takes both, `null` to clear.
+- `create_automation`: trigger `item_moved_to_section`; actions
+  `move_to_section` and `archive_item` documented; `column_value_changed`
+  documents `fromValue` next to `toValue`, for "changes from X to Y" (needs
+  the backend that reads `fromValue`).
+
+### Changed
+- `create_column` says a date range (a monday.com timeline) is two date
+  columns, start and end, not a new type.
+- `create_automation` / `update_automation` refuse a `move_to_section` whose
+  `sectionId` is not a group of that board, and list the board's groups,
+  instead of creating an automation whose every run fails.
+
 ## 0.22.0, 2026-11-05
 
 ### Added

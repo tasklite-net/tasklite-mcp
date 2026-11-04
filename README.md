@@ -30,7 +30,7 @@ client can tell what is safe to run unattended.
 | Area | Tools |
 | --- | --- |
 | Account | `sign_up` `connect` `login` `disconnect` `connection_status` `list_organizations` `configure_external_access` |
-| Structure | `create_project` `create_board` `create_column` `update_board` `update_column` `delete_board` `delete_column` `delete_project` `reorder_columns` `get_board_schema` `list_projects` `list_boards` `export_project` |
+| Structure | `create_project` `create_board` `create_column` `update_board` `update_column` `delete_board` `delete_column` `delete_project` `reorder_columns` `get_board_schema` `list_projects` `list_boards` `export_project` `list_groups` `create_group` `update_group` `delete_group` |
 | Data | `query_items` `create_item` `update_item` `set_cell` `get_cells` `set_cells_if_unchanged` `delete_item` `search` `fetch` |
 | Comments | `list_comments` `add_comment` `update_comment` `delete_comment` |
 | Files | `request_file_upload` `list_uploaded_files` `revoke_upload_link` |

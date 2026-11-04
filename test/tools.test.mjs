@@ -1431,3 +1431,166 @@ test('test, status and disconnect hit the per-app telephony routes', async () =>
     ],
   );
 });
+
+// ── Groups (sections): monday.com groups, and moving rows between them ───────
+
+const GROUPS = {
+  items: [
+    { id: '11111111-1111-4111-8111-111111111111', name: 'משימות לביצוע', color: '#579BFC', order: 0 },
+    { id: '22222222-2222-4222-8222-222222222222', name: 'משימות שבוצעו', color: '#00C875', order: 1 },
+  ],
+  meta: { totalItems: 2 },
+};
+const groupsApi = (method, path) =>
+  method === 'GET' && path.startsWith('/boards/b1/sections') ? GROUPS : {};
+
+test('list_groups reads the board sections and returns id, name, color, order', async () => {
+  const { calls, call } = await harness(groupsApi);
+  const res = await call('list_groups', { boardId: 'b1' });
+  assert.equal(res.isError, false, res.text);
+  assert.equal(calls[0].method, 'GET');
+  assert.match(calls[0].path, /^\/boards\/b1\/sections\?limit=200$/);
+  assert.deepEqual(res.json.groups.map((g) => g.id), ['11111111-1111-4111-8111-111111111111', '22222222-2222-4222-8222-222222222222']);
+  assert.equal(res.json.groups[1].name, 'משימות שבוצעו');
+});
+
+test('create_group posts name and color to the board sections', async () => {
+  const { calls, call } = await harness((m) =>
+    m === 'POST' ? { id: 'g-new', name: 'Q3', color: '#FF0000', order: 2 } : {},
+  );
+  const res = await call('create_group', { boardId: 'b1', name: 'Q3', color: '#FF0000' });
+  assert.equal(res.isError, false, res.text);
+  assert.deepEqual(calls[0], {
+    method: 'POST',
+    path: '/boards/b1/sections',
+    body: { name: 'Q3', color: '#FF0000' },
+  });
+  assert.equal(res.json.id, 'g-new');
+});
+
+test('update_group sends only the given fields, and refuses an empty change', async () => {
+  const { calls, call } = await harness();
+  await call('update_group', { boardId: 'b1', groupId: '22222222-2222-4222-8222-222222222222', name: 'בוצע' });
+  assert.deepEqual(calls[0], {
+    method: 'PATCH',
+    path: '/boards/b1/sections/22222222-2222-4222-8222-222222222222',
+    body: { name: 'בוצע' },
+  });
+  const empty = await call('update_group', { boardId: 'b1', groupId: '22222222-2222-4222-8222-222222222222' });
+  assert.match(empty.json.error, /Nothing to change/);
+  assert.equal(calls.length, 1);
+});
+
+test('delete_group deletes the section and says the rows stay', async () => {
+  const { calls, call } = await harness();
+  const res = await call('delete_group', { boardId: 'b1', groupId: '22222222-2222-4222-8222-222222222222' });
+  assert.deepEqual(calls[0], { method: 'DELETE', path: '/boards/b1/sections/22222222-2222-4222-8222-222222222222', body: undefined });
+  assert.equal(res.json.rowsKept, true);
+});
+
+test('create_item: groupId becomes sectionId, parentId passes through', async () => {
+  const { calls, call } = await harness();
+  await call('create_item', {
+    projectId: 'p1',
+    boardId: 'b1',
+    title: 'משימה',
+    groupId: '11111111-1111-4111-8111-111111111111',
+    parentId: '33333333-3333-4333-8333-333333333333',
+  });
+  assert.equal(calls[0].method, 'POST');
+  assert.equal(calls[0].body.sectionId, '11111111-1111-4111-8111-111111111111');
+  assert.equal(calls[0].body.parentId, '33333333-3333-4333-8333-333333333333');
+  assert.equal('groupId' in calls[0].body, false);
+});
+
+test('create_item without a group sends no sectionId', async () => {
+  const { calls, call } = await harness();
+  await call('create_item', { projectId: 'p1', boardId: 'b1', title: 'x' });
+  assert.equal('sectionId' in calls[0].body, false);
+});
+
+test('update_item: groupId null takes the row out of its group', async () => {
+  const { calls, call } = await harness();
+  await call('update_item', { projectId: 'p1', boardId: 'b1', itemId: 'i1', groupId: null });
+  assert.equal(calls[0].method, 'PATCH');
+  assert.equal(calls[0].body.sectionId, null);
+  const { calls: c2, call: call2 } = await harness();
+  await call2('update_item', { projectId: 'p1', boardId: 'b1', itemId: 'i1', title: 't' });
+  assert.equal('sectionId' in c2[0].body, false, 'no groupId = group unchanged');
+});
+
+const MOVE_DONE = {
+  projectId: 'p1',
+  boardId: 'b1',
+  name: 'בוצע לקבוצה',
+  trigger: 'column_value_changed',
+  triggerConfig: { columnId: 'col-status', toValue: 'בוצע' },
+};
+
+test('create_automation: move_to_section to a group of this board is created', async () => {
+  const { calls, call } = await harness((m, p) =>
+    groupsApi(m, p) === GROUPS ? GROUPS : { id: 'a1' },
+  );
+  const res = await call('create_automation', {
+    ...MOVE_DONE,
+    actions: [{ type: 'move_to_section', config: { sectionId: '22222222-2222-4222-8222-222222222222' } }],
+  });
+  assert.equal(res.isError, false, res.text);
+  const post = calls.find((c) => c.method === 'POST');
+  assert.equal(post.path, '/projects/p1/boards/b1/automations');
+  assert.equal(post.body.actions[0].config.sectionId, '22222222-2222-4222-8222-222222222222');
+});
+
+test('create_automation: move_to_section with a name or a foreign id is refused with the real groups', async () => {
+  for (const sectionId of ['משימות שבוצעו', 'group_title', undefined]) {
+    const { calls, call } = await harness(groupsApi);
+    const res = await call('create_automation', {
+      ...MOVE_DONE,
+      actions: [{ type: 'move_to_section', config: sectionId ? { sectionId } : {} }],
+    });
+    assert.match(res.json.error, /move_to_section needs config\.sectionId/);
+    assert.match(res.json.error, /22222222-2222-4222-8222-222222222222/);
+    assert.equal(calls.some((c) => c.method === 'POST'), false, 'nothing created');
+  }
+});
+
+test('create_automation: a board with no groups is told to create_group first', async () => {
+  const { call } = await harness((m, p) =>
+    p.startsWith('/boards/b1/sections') ? { items: [] } : {},
+  );
+  const res = await call('create_automation', {
+    ...MOVE_DONE,
+    actions: [{ type: 'move_to_section', config: { sectionId: 'x' } }],
+  });
+  assert.match(res.json.error, /create_group first/);
+});
+
+test('update_automation checks move_to_section the same way', async () => {
+  const { calls, call } = await harness(groupsApi);
+  const res = await call('update_automation', {
+    projectId: 'p1',
+    boardId: 'b1',
+    automationId: 'a1',
+    actions: [{ type: 'move_to_section', config: { sectionId: 'nope' } }],
+  });
+  assert.match(res.json.error, /not one/);
+  assert.equal(calls.some((c) => c.method === 'PATCH'), false);
+});
+
+test('create_automation documents fromValue/toValue, item_moved_to_section and the monday recipe', async () => {
+  const { client } = await harness();
+  const { tools } = await client.listTools();
+  const all = JSON.stringify(tools.find((x) => x.name === 'create_automation'));
+  for (const word of ['fromValue', 'toValue', 'item_moved_to_section', 'move_to_section', 'archive_item', 'monday.com']) {
+    assert.ok(all.includes(word), `mentions ${word}`);
+  }
+});
+
+test('create_item refuses a groupId that is not an id (a name, an empty string)', async () => {
+  for (const groupId of ['משימות שבוצעו', '']) {
+    const { calls, call } = await harness();
+    const res = await call('create_item', { projectId: 'p1', boardId: 'b1', title: 'x', groupId });
+    assert.equal(res.isError, true, `refused ${JSON.stringify(groupId)}`);
+    assert.equal(calls.length, 0);
+  }
+});

@@ -467,6 +467,35 @@ const ANNOTATIONS: Record<string, Record<string, unknown>> = {
     idempotentHint: true,
     openWorldHint: false,
   },
+  list_groups: {
+    title: "List a board's groups",
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: true,
+    openWorldHint: false,
+  },
+  create_group: {
+    title: "Add a group to a board",
+    readOnlyHint: false,
+    destructiveHint: false,
+    idempotentHint: false,
+    openWorldHint: false,
+  },
+  update_group: {
+    title: "Rename or recolor a group",
+    readOnlyHint: false,
+    destructiveHint: false,
+    idempotentHint: true,
+    openWorldHint: false,
+  },
+  delete_group: {
+    title: "Delete a group",
+    readOnlyHint: false,
+    // The group goes; its rows stay on the board, under "no group".
+    destructiveHint: true,
+    idempotentHint: true,
+    openWorldHint: false,
+  },
   query_items: {
     title: "List items",
     readOnlyHint: true,
@@ -1360,6 +1389,39 @@ function checkCrossBoardActions(
   return null;
 }
 
+/**
+ * move_to_section takes a group id of the same board. A name, a monday group
+ * id or another board's group would make every run fail on the server, so
+ * look the groups up once and refuse with the real list instead.
+ */
+async function checkGroupActions(
+  api: ReturnType<GetApi>,
+  boardId: string,
+  actions: Array<{ type: string; config: Record<string, unknown> }>,
+): Promise<string | null> {
+  const moves = actions.filter((a) => a.type === "move_to_section");
+  if (!moves.length) return null;
+  const res = await api.request<any>(
+    "GET",
+    `/boards/${boardId}/sections?limit=200`,
+  );
+  const groups: Array<{ id: string; name: string }> =
+    res?.items ?? (Array.isArray(res) ? res : []);
+  for (const a of moves) {
+    const id = a.config?.sectionId;
+    if (typeof id === "string" && groups.some((g) => g.id === id)) continue;
+    const named = groups.map((g) => `"${g.name}" = ${g.id}`).join("; ");
+    return `move_to_section needs config.sectionId, the id of a group on this board${
+      id ? ` (${String(id)} is not one)` : ""
+    }. ${
+      groups.length
+        ? `Groups here: ${named}.`
+        : "This board has no groups yet: create_group first."
+    } Nothing was created.`;
+  }
+  return null;
+}
+
 export function registerTools(
   server: McpServer,
   getApi: GetApi,
@@ -1840,7 +1902,7 @@ export function registerTools(
 
   tool(
     "create_column",
-    "Add a typed column to a board. Valid types: text, rich_text, number, status, date, datetime, duration, people, checkbox, dropdown, label, priority, link, email, phone, relation, lookup, rollup, formula, rating, currency, file. Choose by meaning, date for dates, phone for phones, number/currency for amounts, dropdown/status (with settings.options as an array of labels) for closed choices; text is for free text only. An obvious name/type mismatch is rejected with the suggested type; pass force:true to override. Rules go in settings.validation: { unique, min, max, minLength, maxLength, pattern, patternMessage }, enforced on every write (UI, MCP, App API). Closed choices (dropdown/status) reject values outside settings.options unless settings.allowCustom is true.",
+    "Add a typed column to a board. Valid types: text, rich_text, number, status, date, datetime, duration, people, checkbox, dropdown, label, priority, link, email, phone, relation, lookup, rollup, formula, rating, currency, file. Choose by meaning, date for dates, phone for phones, number/currency for amounts, dropdown/status (with settings.options as an array of labels) for closed choices; text is for free text only. An obvious name/type mismatch is rejected with the suggested type; pass force:true to override. Rules go in settings.validation: { unique, min, max, minLength, maxLength, pattern, patternMessage }, enforced on every write (UI, MCP, App API). Closed choices (dropdown/status) reject values outside settings.options unless settings.allowCustom is true. There is no date-range type: a period (a monday.com timeline, a booking from-to, a project's start and end) is two date columns, \"<name> start\" and \"<name> end\", so calendars, date filters and date_approaching automations work on each end.",
     {
       projectId: z
         .string()
@@ -2113,6 +2175,107 @@ export function registerTools(
           { columnIds },
         ),
       );
+    },
+  );
+
+  // ── Groups: named, colored blocks of rows inside one board (monday's
+  // "groups"; "sections" in the API). A row sits in one group or in none.
+
+  tool(
+    "list_groups",
+    "List the groups of a board in display order: id, name, color. A group is a named block of rows inside one board (\"To do\", \"Done tasks\", \"Q3\"), like a group in monday.com. Rows carry the group id as sectionId (query_items).",
+    {
+      boardId: z
+        .string()
+        .describe("Board id (from list_boards / create_board)"),
+    },
+    async ({ boardId }) => {
+      const res = await getApi().request<any>(
+        "GET",
+        `/boards/${boardId}/sections?limit=200`,
+      );
+      const groups = (res?.items ?? (Array.isArray(res) ? res : [])).map(
+        (s: any) => ({
+          id: s.id,
+          name: s.name,
+          color: s.color,
+          order: s.order,
+          ...(s.description ? { description: s.description } : {}),
+        }),
+      );
+      return ok({ groups });
+    },
+  );
+
+  tool(
+    "create_group",
+    "Add a group to a board: a named, colored block of rows, appended after the existing groups. Put rows in it with create_item / update_item groupId, or move them there from an automation with the move_to_section action (config { sectionId: <group id> }). Call list_groups first so you do not add a second group with the same name.",
+    {
+      boardId: z
+        .string()
+        .describe("Board id (from list_boards / create_board)"),
+      name: z.string().min(1).describe("Group name shown above its rows"),
+      color: z
+        .string()
+        .optional()
+        .describe('Hex color, e.g. "#00C875". Default white'),
+      description: z.string().optional().describe("Free-text description"),
+    },
+    async ({ boardId, name, color, description }) => {
+      const s = await getApi().request<any>(
+        "POST",
+        `/boards/${boardId}/sections`,
+        {
+          name,
+          ...(color ? { color } : {}),
+          ...(description ? { description } : {}),
+        },
+      );
+      return ok({ id: s?.id, name: s?.name, color: s?.color, order: s?.order });
+    },
+  );
+
+  tool(
+    "update_group",
+    "Rename a group, or change its color or description. Fields left out stay as they are.",
+    {
+      boardId: z
+        .string()
+        .describe("Board id (from list_boards / create_board)"),
+      groupId: z.string().describe("Group id (from list_groups)"),
+      name: z.string().min(1).optional().describe("New name"),
+      color: z.string().optional().describe('Hex color, e.g. "#00C875"'),
+      description: z.string().optional().describe("Free-text description"),
+    },
+    async ({ boardId, groupId, ...rest }) => {
+      const body = Object.fromEntries(
+        Object.entries(rest).filter(([, v]) => v !== undefined),
+      );
+      if (!Object.keys(body).length) {
+        return ok({ error: "Nothing to change: pass name, color or description." });
+      }
+      return ok(
+        await getApi().request(
+          "PATCH",
+          `/boards/${boardId}/sections/${groupId}`,
+          body,
+        ),
+      );
+    },
+  );
+
+  tool(
+    "delete_group",
+    "Delete a group. Its rows are NOT deleted: they stay on the board, under no group. Automations that move rows into this group (move_to_section) will fail afterwards, so fix or remove them (list_automations). Confirm with the user first.",
+    {
+      boardId: z
+        .string()
+        .describe("Board id (from list_boards / create_board)"),
+      groupId: z.string().describe("Group id (from list_groups)"),
+    },
+    async ({ boardId, groupId }) => {
+      await getApi().request("DELETE", `/boards/${boardId}/sections/${groupId}`);
+      return ok({ deleted: true, groupId, rowsKept: true });
     },
   );
 
@@ -2437,15 +2600,29 @@ export function registerTools(
         .describe(
           'Cell values keyed by column id: { "<columnId>": value }. Scalars, { amount, currency } for currency, { relatedItemIds: [...] } for relations',
         ),
+      groupId: z
+        .string()
+        .uuid()
+        .optional()
+        .describe(
+          "Group of this board to put the row in (list_groups / create_group). Omit for no group",
+        ),
+      parentId: z
+        .string()
+        .uuid()
+        .optional()
+        .describe(
+          "Makes this row a sub-item of another row on the same board (monday subitems). Omit for a top-level row",
+        ),
     },
-    async ({ projectId, boardId, ...body }) => {
+    async ({ projectId, boardId, groupId, ...body }) => {
       if (body.status)
         await refuseStatusOnDataBoard(getApi(), projectId, boardId);
       return ok(
         await getApi().request(
           "POST",
           `/projects/${projectId}/boards/${boardId}/items`,
-          body,
+          { ...body, ...(groupId ? { sectionId: groupId } : {}) },
         ),
       );
     },
@@ -2453,7 +2630,7 @@ export function registerTools(
 
   tool(
     "update_item",
-    "Update item fields (title, description, status, priority, dueDate, tags). On a data board the task fields (status, priority, dueDate, tags) are hidden: its columns, status included, are set with set_cell.",
+    "Update item fields (title, description, status, priority, dueDate, tags), move the row to another group (groupId, null for no group) or under another row (parentId, null for top level). On a data board the task fields (status, priority, dueDate, tags) are hidden: its columns, status included, are set with set_cell.",
     {
       projectId: z
         .string()
@@ -2485,15 +2662,27 @@ export function registerTools(
         .array(z.string())
         .optional()
         .describe("Tags as an array of strings"),
+      groupId: z
+        .string()
+        .uuid()
+        .nullable()
+        .optional()
+        .describe("Group to move the row to (list_groups); null takes it out of its group"),
+      parentId: z
+        .string()
+        .uuid()
+        .nullable()
+        .optional()
+        .describe("Row on the same board to file this one under; null makes it top-level"),
     },
-    async ({ projectId, boardId, itemId, ...body }) => {
+    async ({ projectId, boardId, itemId, groupId, ...body }) => {
       if (body.status)
         await refuseStatusOnDataBoard(getApi(), projectId, boardId);
       return ok(
         await getApi().request(
           "PATCH",
           `/projects/${projectId}/boards/${boardId}/items/${itemId}`,
-          body,
+          { ...body, ...(groupId !== undefined ? { sectionId: groupId } : {}) },
         ),
       );
     },
@@ -5530,7 +5719,7 @@ Roles are keys from list_app_roles, plus "*" (any signed-in user) and "public". 
 
   tool(
     "create_automation",
-    'Create an automation on a board: when something happens, do something. The most useful action here is http_request, which calls an external API and writes the answer back into columns, pair it with the "scheduled" trigger and the board keeps itself up to date (prices, exchange rates, shipment status, weather). Triggers: item_created, status_changed, column_value_changed, date_approaching, scheduled. Actions: http_request, send_notification, send_email, send_push, change_status, set_column_value, create_cross_board_item, send_webhook. The scheduled trigger has no cron expression: the server checks once an hour, and triggerConfig takes { intervalHours, runAtHour } only (intervalHours: at least this many hours between runs, default 24; runAtHour: 0-23, run only during that hour of the day in UTC, not in the user\'s time zone, so convert: 08:00 in Israel is runAtHour 5 in summer and 6 in winter). A scheduled run executes the actions once for every row of the board that passes conditions, so filter with conditions. send_push sends a notification to the phones of app users through the app\'s own Firebase project (set up once per app: push_status; try it with send_test_push). Its config: { title, body, data, userIds, recipientsFromRelation, includeRowOwner, sound, badge, dataOnly }. title and body take {{column name}} placeholders, title defaults to the row title. Recipients are the union of: the row\'s owner under row-level security (includeRowOwner, default true; false leaves them out), userIds (fixed user ids, as in list_app_users), and recipientsFromRelation, a dotted path of column NAMES such as "Client.Coach.Coach user" that walks relation columns from this row and whose LAST segment must be a people column holding user ids (a single segment is a people column on this board); it does not resolve the user linked to a row by an invite or by phone, so without such a people column use userIds or the row owner. data is a flat object of strings the app reads to decide where to open (itemId and boardId are added). sound: "default" or the file name of a sound bundled in the app; badge: 0 to 99999, 0 clears; dataOnly: true shows nothing and delivers only data (no title, body, sound or badge; iOS may throttle or drop it). With no recipient the action is skipped, not failed. Two more things every action list can use: a { type: "delay", config: { minutes | hours | days } } action pauses the run and resumes the actions after it later (reminders, follow-ups); and any network action (http_request, send_webhook, send_email, send_whatsapp) may carry config.retry: { attempts (1-5), delaySeconds (1-60) }. send_webhook accepts config.secret for an HMAC signature. send_email sends mail from the organization to the people on a row. Its config: { to, subject, body, columnEmailField, fromName, replyTo, kind, attachments }. kind is "transactional" (the default: orders, receipts, notifications) or "marketing" (promotional mail: it needs the Pro plan or higher and a verified sender domain, and it gets an unsubscribe footer; people who unsubscribed are skipped). attachments is an array of FILE column ids on the triggering row (or {{column.<id>}}): the stored files in those cells are attached, up to 5MB in total, and a missing file is skipped instead of failing the action. Email is counted per month by plan: Free 300, Plus 3000, Pro 20000 (read the numbers with get_email_usage); a message held back by the quota is recorded as skipped in the communications log and can be resent from there. To send email from an app\'s own server instead of an automation, POST /apps/<slug>/api/_email/send with the app server key (X-API-Key, never a user token; the key needs the \"email\" or \"write\" scope, see create_app_api_key): { to: [up to 50 addresses], subject, html or text, replyTo, kind, attachmentIds: [stored file ids] }; each app may send 500 a day (429 APP_EMAIL_DAILY_LIMIT). create_cross_board_item copies a new row to another board: config { targetBoardId, title?: "{{item.title}}", columnValues: { "<column id on the TARGET board>": "{{<column NAME on this board>}}" } }; there is no mapping field, and a column left out is not copied. To act only on some rows pass conditions, e.g. [{ field: "<column id on this board>", operator: "equals", value: "New seller" }]. Change an automation later with update_automation; call list_automations first so you do not add a second one that does the same thing.',
+    'Create an automation on a board: when something happens, do something. The most useful action here is http_request, which calls an external API and writes the answer back into columns, pair it with the "scheduled" trigger and the board keeps itself up to date (prices, exchange rates, shipment status, weather). Triggers: item_created, status_changed, column_value_changed (with fromValue/toValue for "changes from X to Y"), item_moved_to_section, date_approaching, scheduled. Actions: http_request, send_notification, send_email, send_push, change_status, set_column_value, move_to_section (move the row into a group, config { sectionId: <group id> }), archive_item, create_cross_board_item, send_webhook. The most common monday.com automation, "when Status changes to Done move item to group Done tasks", is trigger column_value_changed { columnId: <status column>, toValue: "Done" } (the option value from get_board_schema) with action move_to_section { sectionId: <id of that group> }. The scheduled trigger has no cron expression: the server checks once an hour, and triggerConfig takes { intervalHours, runAtHour } only (intervalHours: at least this many hours between runs, default 24; runAtHour: 0-23, run only during that hour of the day in UTC, not in the user\'s time zone, so convert: 08:00 in Israel is runAtHour 5 in summer and 6 in winter). A scheduled run executes the actions once for every row of the board that passes conditions, so filter with conditions. send_push sends a notification to the phones of app users through the app\'s own Firebase project (set up once per app: push_status; try it with send_test_push). Its config: { title, body, data, userIds, recipientsFromRelation, includeRowOwner, sound, badge, dataOnly }. title and body take {{column name}} placeholders, title defaults to the row title. Recipients are the union of: the row\'s owner under row-level security (includeRowOwner, default true; false leaves them out), userIds (fixed user ids, as in list_app_users), and recipientsFromRelation, a dotted path of column NAMES such as "Client.Coach.Coach user" that walks relation columns from this row and whose LAST segment must be a people column holding user ids (a single segment is a people column on this board); it does not resolve the user linked to a row by an invite or by phone, so without such a people column use userIds or the row owner. data is a flat object of strings the app reads to decide where to open (itemId and boardId are added). sound: "default" or the file name of a sound bundled in the app; badge: 0 to 99999, 0 clears; dataOnly: true shows nothing and delivers only data (no title, body, sound or badge; iOS may throttle or drop it). With no recipient the action is skipped, not failed. Two more things every action list can use: a { type: "delay", config: { minutes | hours | days } } action pauses the run and resumes the actions after it later (reminders, follow-ups); and any network action (http_request, send_webhook, send_email, send_whatsapp) may carry config.retry: { attempts (1-5), delaySeconds (1-60) }. send_webhook accepts config.secret for an HMAC signature. send_email sends mail from the organization to the people on a row. Its config: { to, subject, body, columnEmailField, fromName, replyTo, kind, attachments }. kind is "transactional" (the default: orders, receipts, notifications) or "marketing" (promotional mail: it needs the Pro plan or higher and a verified sender domain, and it gets an unsubscribe footer; people who unsubscribed are skipped). attachments is an array of FILE column ids on the triggering row (or {{column.<id>}}): the stored files in those cells are attached, up to 5MB in total, and a missing file is skipped instead of failing the action. Email is counted per month by plan: Free 300, Plus 3000, Pro 20000 (read the numbers with get_email_usage); a message held back by the quota is recorded as skipped in the communications log and can be resent from there. To send email from an app\'s own server instead of an automation, POST /apps/<slug>/api/_email/send with the app server key (X-API-Key, never a user token; the key needs the \"email\" or \"write\" scope, see create_app_api_key): { to: [up to 50 addresses], subject, html or text, replyTo, kind, attachmentIds: [stored file ids] }; each app may send 500 a day (429 APP_EMAIL_DAILY_LIMIT). create_cross_board_item copies a new row to another board: config { targetBoardId, title?: "{{item.title}}", columnValues: { "<column id on the TARGET board>": "{{<column NAME on this board>}}" } }; there is no mapping field, and a column left out is not copied. To act only on some rows pass conditions, e.g. [{ field: "<column id on this board>", operator: "equals", value: "New seller" }]. Change an automation later with update_automation; call list_automations first so you do not add a second one that does the same thing.',
     {
       projectId: z
         .string()
@@ -5544,17 +5733,18 @@ Roles are keys from list_app_roles, plus "*" (any signed-in user) and "public". 
           "item_created",
           "status_changed",
           "column_value_changed",
+          "item_moved_to_section",
           "date_approaching",
           "scheduled",
         ])
         .describe(
-          "Event that starts the automation: item_created, status_changed, column_value_changed, date_approaching, or scheduled (checked hourly; an interval in hours and an optional hour of the day in UTC, not a cron expression)",
+          "Event that starts the automation: item_created, status_changed (the built-in task status of a task board only), column_value_changed (any column, including a status or dropdown column you created), item_moved_to_section (a row moved into a group; triggerConfig { toSectionId: <group id> } narrows it to one group), date_approaching, or scheduled (checked hourly; an interval in hours and an optional hour of the day in UTC, not a cron expression)",
         ),
       triggerConfig: z
         .record(z.any())
         .optional()
         .describe(
-          'For scheduled: { intervalHours?: number (default 24), runAtHour?: 0-23 in UTC }, e.g. { intervalHours: 1 } for every hour, or { runAtHour: 5, intervalHours: 23 } for once a day at 05:00 UTC. The interval is measured from the previous run, which ends a little after the hour, so with runAtHour use 23, not 24: with 24 the next day\'s check falls just short and the run slips a day. A cron field is not read. For column_value_changed: { columnName }',
+          'For scheduled: { intervalHours?: number (default 24), runAtHour?: 0-23 in UTC }, e.g. { intervalHours: 1 } for every hour, or { runAtHour: 5, intervalHours: 23 } for once a day at 05:00 UTC. The interval is measured from the previous run, which ends a little after the hour, so with runAtHour use 23, not 24: with 24 the next day\'s check falls just short and the run slips a day. A cron field is not read. For column_value_changed: { columnId (or columnName), toValue?, fromValue? }: toValue is the new value and fromValue the value before the change, both as stored (for a status or dropdown column the option value from get_board_schema, not its label); either may be left out for "any". "When Status changes from Waiting to Answered" is { columnId: "<status column id>", fromValue: "Waiting", toValue: "Answered" }. For item_moved_to_section: { toSectionId? }',
         ),
       actions: z
         .array(
@@ -5562,12 +5752,12 @@ Roles are keys from list_app_roles, plus "*" (any signed-in user) and "public". 
             type: z
               .string()
               .describe(
-                "Action type: http_request, send_notification, send_email, send_push, change_status, set_column_value, create_cross_board_item, send_webhook, send_whatsapp, delay",
+                "Action type: http_request, send_notification, send_email, send_push, change_status, set_column_value, move_to_section, archive_item, create_cross_board_item, send_webhook, send_whatsapp, delay",
               ),
             config: z
               .record(z.any())
               .describe(
-                'Action-specific config, e.g. { url, method, headers, responseMapping } for http_request, { title, body, recipientsFromRelation, includeRowOwner, userIds, data, sound, badge, dataOnly } for send_push, or { to, subject, body, kind: "transactional" | "marketing", attachments: ["<file column id>"] } for send_email',
+                'Action-specific config, e.g. { url, method, headers, responseMapping } for http_request, { title, body, recipientsFromRelation, includeRowOwner, userIds, data, sound, badge, dataOnly } for send_push, { to, subject, body, kind: "transactional" | "marketing", attachments: ["<file column id>"] } for send_email, { columnId, value } for set_column_value, { sectionId: "<group id from list_groups>" } for move_to_section (a group of this board), or {} for archive_item',
               ),
           }),
         )
@@ -5589,6 +5779,8 @@ Roles are keys from list_app_roles, plus "*" (any signed-in user) and "public". 
     }) => {
       const crossBoardProblem = checkCrossBoardActions(actions);
       if (crossBoardProblem) return ok({ error: crossBoardProblem });
+      const groupProblem = await checkGroupActions(getApi(), boardId, actions);
+      if (groupProblem) return ok({ error: groupProblem });
       // http_request maps response paths onto real column ids. A model that
       // guessed a name instead would create an automation that runs, succeeds,
       // and writes nothing, so say it plainly rather than let it fail quietly.
@@ -5678,6 +5870,8 @@ Roles are keys from list_app_roles, plus "*" (any signed-in user) and "public". 
       if (actions) {
         const crossBoardProblem = checkCrossBoardActions(actions);
         if (crossBoardProblem) return ok({ error: crossBoardProblem });
+        const groupProblem = await checkGroupActions(getApi(), boardId, actions);
+        if (groupProblem) return ok({ error: groupProblem });
       }
       const body: Record<string, unknown> = {};
       if (name !== undefined) body.name = name;
