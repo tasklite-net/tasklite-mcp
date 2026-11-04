@@ -3,6 +3,14 @@
 All notable changes to `@tasklite/mcp`. Versions that were never published
 are folded into the next published one, so the numbers on npm may skip.
 
+## 0.21.2, 2026-11-04
+
+### Changed
+- `deploy_frontend` takes a bundle of up to 95MB zipped (was 50MB), matching the
+  hosting, which now takes 95MB packed and 600MB unpacked: a WordPress site copied by
+  the bot is a thousand pages plus its scripts. Under the 100MB a request through
+  Cloudflare may carry.
+
 ## 0.21.0, 2026-10-29
 
 ### Added
