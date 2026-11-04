@@ -1594,3 +1594,37 @@ test('create_item refuses a groupId that is not an id (a name, an empty string)'
     assert.equal(calls.length, 0);
   }
 });
+
+// ── monday.com connect: the token goes through a one-time page, never the chat ──
+
+test('connect_monday mints a link for the organization and returns it', async () => {
+  const { calls, call } = await harness((m, p) =>
+    m === 'POST' && p.startsWith('/integrations/monday/connect-link')
+      ? { url: 'https://app.tasklite.net/connect/monday/abc', expiresAt: '2026-11-05T00:00:00.000Z' }
+      : {},
+  );
+  const res = await call('connect_monday', { organizationId: 'org-1' });
+  assert.equal(res.isError, false, res.text);
+  const post = calls.find((c) => c.method === 'POST');
+  assert.equal(post.path, '/integrations/monday/connect-link?organizationId=org-1');
+  assert.equal(res.json.url, 'https://app.tasklite.net/connect/monday/abc');
+});
+
+test('monday_status and disconnect_monday call their routes', async () => {
+  const { calls, call } = await harness((m, p) =>
+    p.startsWith('/integrations/monday/status') ? { connected: true, linkPending: false } : { disconnected: true },
+  );
+  const st = await call('monday_status', { organizationId: 'org-1' });
+  assert.equal(st.json.connected, true);
+  const dc = await call('disconnect_monday', { organizationId: 'org-1' });
+  assert.equal(dc.json.disconnected, true);
+  assert.ok(calls.some((c) => c.method === 'GET' && c.path === '/integrations/monday/status?organizationId=org-1'));
+  assert.ok(calls.some((c) => c.method === 'POST' && c.path === '/integrations/monday/disconnect?organizationId=org-1'));
+});
+
+test('connect_monday tells the agent never to ask for the token in the chat', async () => {
+  const { client } = await harness(() => ({}));
+  const { tools } = await client.listTools();
+  const t = tools.find((x) => x.name === 'connect_monday');
+  assert.match(t.description, /never ask for the token in the chat/);
+});

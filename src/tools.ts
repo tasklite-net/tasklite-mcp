@@ -584,6 +584,28 @@ const ANNOTATIONS: Record<string, Record<string, unknown>> = {
     // an email, so the effect reaches outside the workspace.
     openWorldHint: true,
   },
+  connect_monday: {
+    title: "Link for connecting monday.com",
+    readOnlyHint: false,
+    destructiveHint: false,
+    // Each call mints a new link and voids the unused one.
+    idempotentHint: false,
+    openWorldHint: true,
+  },
+  monday_status: {
+    title: "Is monday.com connected",
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: true,
+    openWorldHint: false,
+  },
+  disconnect_monday: {
+    title: "Forget the monday.com token",
+    readOnlyHint: false,
+    destructiveHint: true,
+    idempotentHint: true,
+    openWorldHint: false,
+  },
   create_signature_request: {
     title: "Send a PDF for signature",
     readOnlyHint: false,
@@ -3659,6 +3681,74 @@ export function registerTools(
         `/api/client-uploads/tokens/${tokenId}?organizationId=${orgId}`,
       );
       return ok({ revoked: true, tokenId });
+    },
+  );
+
+  // monday.com migration: the customer's token never passes through the chat.
+  // These tools hand out a one-time page for it and report whether it arrived.
+
+  tool(
+    "connect_monday",
+    "Get a one-time link (24 hours) where the customer pastes their monday.com personal token, to move their boards over. Send the link to the customer and never ask for the token in the chat: the page checks it with monday and stores it encrypted, and you never see it. A new call replaces an unused link. Then call monday_status to see whether it is connected.",
+    {
+      organizationId: z
+        .string()
+        .optional()
+        .describe(
+          "Organization id; defaults to the credential organization when omitted",
+        ),
+    },
+    async ({ organizationId }: { organizationId?: string }) => {
+      const orgId = await resolveOrg(organizationId);
+      const res = await getApi().request<{ url: string; expiresAt: string }>(
+        "POST",
+        `/integrations/monday/connect-link?organizationId=${orgId}`,
+      );
+      return ok(res);
+    },
+  );
+
+  tool(
+    "monday_status",
+    "Whether the customer's monday.com account is connected (after connect_monday), as whom, and whether that user is a monday admin (a non-admin may not see every board). Never returns the token.",
+    {
+      organizationId: z
+        .string()
+        .optional()
+        .describe(
+          "Organization id; defaults to the credential organization when omitted",
+        ),
+    },
+    async ({ organizationId }: { organizationId?: string }) => {
+      const orgId = await resolveOrg(organizationId);
+      return ok(
+        await getApi().request(
+          "GET",
+          `/integrations/monday/status?organizationId=${orgId}`,
+        ),
+      );
+    },
+  );
+
+  tool(
+    "disconnect_monday",
+    "Forget the customer's monday.com token, when the move is done or the customer asks. Then tell the customer they can regenerate the token in monday so the old one stops working.",
+    {
+      organizationId: z
+        .string()
+        .optional()
+        .describe(
+          "Organization id; defaults to the credential organization when omitted",
+        ),
+    },
+    async ({ organizationId }: { organizationId?: string }) => {
+      const orgId = await resolveOrg(organizationId);
+      return ok(
+        await getApi().request(
+          "POST",
+          `/integrations/monday/disconnect?organizationId=${orgId}`,
+        ),
+      );
     },
   );
 

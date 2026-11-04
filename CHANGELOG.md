@@ -15,6 +15,10 @@ are folded into the next published one, so the numbers on npm may skip.
   `move_to_section` and `archive_item` documented; `column_value_changed`
   documents `fromValue` next to `toValue`, for "changes from X to Y" (needs
   the backend that reads `fromValue`).
+- `connect_monday`, `monday_status`, `disconnect_monday`: a one-time page
+  where the customer pastes their monday.com token, so it never goes through
+  the chat; the server checks it with monday and stores it encrypted (needs
+  the backend with `/integrations/monday`).
 
 ### Changed
 - `create_column` says a date range (a monday.com timeline) is two date
