@@ -230,10 +230,12 @@ export class TaskLiteApi {
     fieldName: string,
     fileName: string,
     data: Buffer,
+    fields: Record<string, string> = {},
     retried = false,
   ): Promise<T> {
     const token = await this.getToken();
     const form = new FormData();
+    for (const [k, v] of Object.entries(fields)) form.append(k, v);
     form.append(fieldName, new Blob([new Uint8Array(data)]), fileName);
     const res = await fetch(`${this.apiUrl}${path.startsWith('/') ? '' : '/'}${path}`, {
       method: 'POST',
@@ -243,7 +245,7 @@ export class TaskLiteApi {
 
     if (res.status === 401 && this.isApiKey && !retried) {
       this.session = null;
-      return this.requestUpload<T>(path, fieldName, fileName, data, true);
+      return this.requestUpload<T>(path, fieldName, fileName, data, fields, true);
     }
 
     const text = await res.text();

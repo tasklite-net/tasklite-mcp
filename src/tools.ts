@@ -8,6 +8,7 @@ import { randomBytes } from "node:crypto";
 import { existsSync, statSync } from "node:fs";
 import { resolve as resolvePath, join as joinPath } from "node:path";
 import AdmZip from "adm-zip";
+import { packParts } from "./bundle-parts.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import {
@@ -5765,7 +5766,7 @@ Roles are keys from list_app_roles, plus "*" (any signed-in user) and "public". 
         .string()
         .optional()
         .describe(
-          "Local path to the BUILD OUTPUT directory (the one containing index.html), not the project root. Only where the MCP runs on the same machine as the files",
+          "Local path to the BUILD OUTPUT directory (the one containing index.html), not the project root. Only where the MCP runs on the same machine as the files. A folder too big for one upload (over 95MB zipped, a copied WordPress store) is sent in parts and goes live as one version",
         ),
       fromAppId: z
         .string()
@@ -5931,9 +5932,34 @@ Roles are keys from list_app_roles, plus "*" (any signed-in user) and "public". 
               : `No index.html in ${abs}. Pass the build OUTPUT directory, and build first if you haven't.`,
           );
         }
-        const zip = new AdmZip();
-        zip.addLocalFolder(abs);
-        buffer = zip.toBuffer();
+        // A folder over one request (a copied WordPress store is 200 MB and
+        // more) goes as parts, and the site goes live with the last one.
+        const packed = packParts(abs, MAX_BUNDLE);
+        if (packed.count > 1) {
+          let uploadId = "";
+          let last: Record<string, unknown> = {};
+          for (let i = 0; i < packed.count; i++) {
+            const fields: Record<string, string> = {
+              final: String(i === packed.count - 1),
+            };
+            if (uploadId) fields.uploadId = uploadId;
+            last = await getApi().requestUpload<Record<string, unknown>>(
+              `/organizations/${orgId}/apps/${appId}/deployments/parts`,
+              "file",
+              `part-${i + 1}.zip`,
+              packed.part(i),
+              fields,
+            );
+            uploadId = String(last.uploadId || "");
+          }
+          const { published: publishedByThisDeploy, ...rest } = last;
+          return ok({
+            ...rest,
+            appPublished: true,
+            note: `Live now, sent in ${packed.count} parts that went live together${publishedByThisDeploy ? " (this deploy also published the app)" : ""}. Old versions are kept for rollback (rollback_deployment); only the last 5 stay on disk.`,
+          });
+        }
+        buffer = packed.part(0);
       }
       checkBundleSize(buffer.length);
 
