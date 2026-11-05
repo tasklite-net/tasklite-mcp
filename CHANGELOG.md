@@ -3,6 +3,14 @@
 All notable changes to `@tasklite/mcp`. Versions that were never published
 are folded into the next published one, so the numbers on npm may skip.
 
+## Unreleased
+
+### Changed
+- `configure_app_settings` and the server instructions describe `settings.ai.actions.<name>.files`
+  and the `files`, `instruction` and `schema` fields of `_ai/v1/run`: extracting data from an
+  uploaded PDF or image. Needs the backend change (tasklite-net/tasklite#346) and its switch
+  `APP_AI_FILES`.
+
 ## 0.22.0, 2026-11-05
 
 ### Added

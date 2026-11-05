@@ -80,7 +80,11 @@ named actions in the app's settings with configure_app_settings, set
 and call POST /apps/<slug>/api/_ai/v1/run { action, input } with the signed-in
 user's token. The model and its key are TaskLite's: never put a model API key
 in an app and never call a model provider from a page. Output "json" with a
-schema returns parsed data. Runs are charged to the owner's usage allowance;
+schema returns parsed data. To extract fields from an uploaded PDF or image
+(an apartment list, a contract), give the action files: { max, required?,
+allowInstruction?, allowSchema? } and call with files: [{ endpoint, itemId, field,
+attachmentId }] (a file column the caller may read through the app API; up to
+10MB and 30 PDF pages per file; needs the backend switch APP_AI_FILES). Runs are charged to the owner's usage allowance;
 show the error's messageHe/message on 429. An app without sign-in cannot run
 AI actions.
 
