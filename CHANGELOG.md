@@ -17,6 +17,14 @@ are folded into the next published one, so the numbers on npm may skip.
   writes nothing), `run_telephony_sync` and `disconnect_telephony`. Needs the
   backend release that adds the telephony module.
 
+### Changed
+- `create_signature_request`: the description no longer claims the code goes
+  out by WhatsApp when it does not. New per signer `channel` (email default,
+  sms, whatsapp; falls back to email and the audit trail says so), and
+  `declinedColumnId` / `declinedValue` to record a signer declining on the item,
+  like `signedFileColumnId` does for the signed file. Needs the backend change
+  that adds them.
+
 ## 0.21.2, 2026-11-04
 
 ### Changed
