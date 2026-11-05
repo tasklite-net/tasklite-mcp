@@ -3,6 +3,20 @@
 All notable changes to `@tasklite/mcp`. Versions that were never published
 are folded into the next published one, so the numbers on npm may skip.
 
+## 0.22.0, 2026-11-05
+
+### Added
+- Phone systems (PBX) per app (backend `organizations/:orgId/apps/:appId/telephony`,
+  provider-agnostic, PayCall / HoduSoft MasterPBX first). Tools:
+  `list_telephony_providers` and `get_telephony_connection` (read-only),
+  `start_telephony_connection` (returns a one-time link the customer opens to
+  type the API token themselves, so it never passes through the chat),
+  `test_telephony_connection`, `configure_telephony_mapping` (the board that
+  receives a row per call, a column per call field, optional links to customers
+  by phone and to employees by extension), `preview_telephony_sync` (read-only,
+  writes nothing), `run_telephony_sync` and `disconnect_telephony`. Needs the
+  backend release that adds the telephony module.
+
 ## 0.21.2, 2026-11-04
 
 ### Changed

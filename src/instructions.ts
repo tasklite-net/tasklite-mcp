@@ -145,6 +145,13 @@ app: it is the "Log in" button in the approval email, and without it the
 approved user is told nothing about where to go. Unapproved users are never
 billed.
 
+A customer phone system (PBX) can write its calls into a board of their app:
+list_telephony_providers, then start_telephony_connection returns a one-time link
+for the CUSTOMER to type the API token on (never ask for it or accept it pasted),
+test_telephony_connection, configure_telephony_mapping (board, columns, optional
+customer by phone and employee by extension), preview_telephony_sync (writes
+nothing) and run_telephony_sync.
+
 Confirm before delete_item. Creation tools return an adminUrl, so end by telling
 the user where their ready-made admin is. Pass organizationId explicitly when the
 user has more than one org.`;

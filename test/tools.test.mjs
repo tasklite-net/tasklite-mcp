@@ -1332,3 +1332,102 @@ test('configure_app_settings documents the ai actions the server reads', async (
   assert.match(settings.description, /_ai\/v1\/run/);
   assert.match(settings.description, /usage allowance/);
 });
+
+// ── Telephony (PBX) ──────────────────────────────────────────────────────────
+const TELEPHONY_TOOLS = [
+  'list_telephony_providers',
+  'get_telephony_connection',
+  'start_telephony_connection',
+  'test_telephony_connection',
+  'configure_telephony_mapping',
+  'preview_telephony_sync',
+  'run_telephony_sync',
+  'disconnect_telephony',
+];
+
+test('telephony tools are registered, annotated, and the read-only ones say so', async () => {
+  const { client } = await harness();
+  const { tools } = await client.listTools();
+  const byName = new Map(tools.map((t) => [t.name, t]));
+  for (const name of TELEPHONY_TOOLS) {
+    const t = byName.get(name);
+    assert.ok(t, `${name} is registered`);
+    assert.ok(t.annotations?.title, `${name} has a title`);
+  }
+  for (const name of ['list_telephony_providers', 'get_telephony_connection', 'preview_telephony_sync']) {
+    const t = byName.get(name);
+    assert.equal(t.annotations.readOnlyHint, true, `${name} is read-only`);
+    assert.match(t.description, /^Read-only/, `${name} says so`);
+  }
+  for (const name of ['start_telephony_connection', 'configure_telephony_mapping', 'run_telephony_sync', 'disconnect_telephony']) {
+    assert.equal(byName.get(name).annotations.readOnlyHint, false, `${name} writes`);
+  }
+  assert.equal(byName.get('disconnect_telephony').annotations.destructiveHint, true);
+});
+
+test('start_telephony_connection asks for a one-time link and takes no secret', async () => {
+  const { calls, call, client } = await harness(() => ({ url: 'https://app.test/connect/telephony/abc', expiresAt: 'x' }));
+  const { tools } = await client.listTools();
+  const schema = tools.find((t) => t.name === 'start_telephony_connection').inputSchema;
+  assert.deepEqual(Object.keys(schema.properties).sort(), ['appId', 'organizationId', 'provider', 'publicConfig']);
+
+  const res = await call('start_telephony_connection', {
+    appId: 'app-1',
+    provider: 'paycall',
+    publicConfig: { baseUrl: 'https://master.ippbx.co.il/ippbx_api/v1.4/api/info' },
+  });
+  assert.equal(res.isError, false);
+  assert.equal(calls[0].method, 'POST');
+  assert.equal(calls[0].path, `/organizations/${ORG}/apps/app-1/telephony/connect-link`);
+  assert.equal(calls[0].body.provider, 'paycall');
+  assert.equal(res.json.url, 'https://app.test/connect/telephony/abc');
+});
+
+test('configure_telephony_mapping sends the mapping as is and refuses an unknown call field', async () => {
+  const { calls, call } = await harness();
+  const mapping = {
+    appId: 'app-1',
+    boardId: 'b1',
+    columns: { externalId: 'c1', from: 'c2', status: 'c3' },
+    employee: { boardId: 'b2', matchColumnId: 'c9', linkColumnId: 'c8' },
+  };
+  const ok = await call('configure_telephony_mapping', mapping);
+  assert.equal(ok.isError, false);
+  assert.equal(calls[0].method, 'PUT');
+  assert.equal(calls[0].path, `/organizations/${ORG}/apps/app-1/telephony/mapping`);
+  assert.equal(calls[0].body.appId, undefined);
+  assert.deepEqual(calls[0].body.columns, mapping.columns);
+  assert.deepEqual(calls[0].body.employee, mapping.employee);
+
+  const bad = await call('configure_telephony_mapping', { ...mapping, columns: { color: 'c1' } });
+  assert.equal(bad.isError, true);
+  assert.equal(calls.length, 1);
+});
+
+test('preview_telephony_sync is always a dry run, run_telephony_sync never is', async () => {
+  const { calls, call } = await harness();
+  await call('preview_telephony_sync', { appId: 'app-1', from: '2026-11-01', to: '2026-11-03' });
+  await call('run_telephony_sync', { appId: 'app-1' });
+  assert.equal(calls[0].path, `/organizations/${ORG}/apps/app-1/telephony/sync`);
+  assert.deepEqual(calls[0].body, { from: '2026-11-01', to: '2026-11-03', dryRun: true });
+  assert.equal(calls[1].body.dryRun, false);
+  const bad = await call('preview_telephony_sync', { appId: 'app-1', from: 'yesterday' });
+  assert.equal(bad.isError, true);
+});
+
+test('test, status and disconnect hit the per-app telephony routes', async () => {
+  const { calls, call } = await harness();
+  await call('get_telephony_connection', { appId: 'app-1' });
+  await call('test_telephony_connection', { appId: 'app-1' });
+  await call('disconnect_telephony', { appId: 'app-1' });
+  await call('list_telephony_providers', {});
+  assert.deepEqual(
+    calls.map((c) => `${c.method} ${c.path}`),
+    [
+      `GET /organizations/${ORG}/apps/app-1/telephony`,
+      `POST /organizations/${ORG}/apps/app-1/telephony/test`,
+      `DELETE /organizations/${ORG}/apps/app-1/telephony/connection`,
+      'GET /telephony-providers',
+    ],
+  );
+});

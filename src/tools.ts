@@ -591,6 +591,66 @@ const ANNOTATIONS: Record<string, Record<string, unknown>> = {
     idempotentHint: true,
     openWorldHint: false,
   },
+  list_telephony_providers: {
+    title: "List phone system providers",
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: true,
+    openWorldHint: false,
+  },
+  get_telephony_connection: {
+    title: "Read an app's phone system connection",
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: true,
+    openWorldHint: false,
+  },
+  start_telephony_connection: {
+    title: "Start a phone system connection",
+    readOnlyHint: false,
+    destructiveHint: false,
+    // Each call mints another link and retires the unused one.
+    idempotentHint: false,
+    openWorldHint: false,
+  },
+  test_telephony_connection: {
+    title: "Test a phone system connection",
+    // It records the result on the connection.
+    readOnlyHint: false,
+    destructiveHint: false,
+    idempotentHint: true,
+    // It reads from the customer's phone system.
+    openWorldHint: true,
+  },
+  configure_telephony_mapping: {
+    title: "Map calls to a board",
+    readOnlyHint: false,
+    destructiveHint: false,
+    idempotentHint: true,
+    openWorldHint: false,
+  },
+  preview_telephony_sync: {
+    title: "Preview a call log sync",
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: true,
+    openWorldHint: true,
+  },
+  run_telephony_sync: {
+    title: "Sync calls to the board now",
+    readOnlyHint: false,
+    destructiveHint: false,
+    // A call already written is never written twice.
+    idempotentHint: true,
+    openWorldHint: true,
+  },
+  disconnect_telephony: {
+    title: "Remove a phone system connection",
+    readOnlyHint: false,
+    destructiveHint: true,
+    idempotentHint: true,
+    openWorldHint: false,
+  },
   list_uploaded_files: {
     title: "List files on an item",
     readOnlyHint: true,
@@ -3127,6 +3187,234 @@ export function registerTools(
         { reason },
       );
       return ok(signatureView(doc));
+    },
+  );
+
+  // ── Telephony: a customer phone system (PBX) whose call log is written to a
+  // board of their app. Provider-agnostic; PayCall (MasterPBX) is the first.
+  // Backend: organizations/:orgId/apps/:appId/telephony (owner/admin to change).
+
+  const TELEPHONY_APP_ID = z
+    .string()
+    .describe("App id or slug (from list_apps / create_app)");
+  const TELEPHONY_ORG_ID = z
+    .string()
+    .optional()
+    .describe("Organization id; defaults to the credential organization when omitted");
+
+  tool(
+    "list_telephony_providers",
+    "Read-only. List the phone systems (PBX providers) an app can be connected to, what each can do (call log, live calls, recordings, click-to-call), and which fields it needs: public settings such as the server address go to start_telephony_connection, secret fields (the API token) are typed by the customer on a one-time page and never pass through you.",
+    {},
+    async () => ok(await getApi().request("GET", "/telephony-providers")),
+  );
+
+  tool(
+    "get_telephony_connection",
+    "Read-only. The phone system connection of an app: provider, status (pending = link made and no token typed yet, connected, error), the public settings, whether a token is stored (never the token), the board mapping, the last sync result and the last error. connection is null when nothing was started.",
+    { appId: TELEPHONY_APP_ID, organizationId: TELEPHONY_ORG_ID },
+    async ({ appId, organizationId }: { appId: string; organizationId?: string }) => {
+      const orgId = await resolveOrg(organizationId);
+      return ok(await getApi().request("GET", `/organizations/${orgId}/apps/${appId}/telephony`));
+    },
+  );
+
+  tool(
+    "start_telephony_connection",
+    "Start connecting an app to a phone system (PBX) and get the one-time link the CUSTOMER opens to type the API token themselves. The token never passes through the chat, you or the logs: do not ask for it, do not accept it pasted. Send the link to the customer as is. It works once, for 24 hours, and is spent only after the token passes a check against the PBX (a typo can be fixed on the same page). Calling again makes a new link and replaces the unused one; the stored token is kept until a new one is typed. Pick the provider from list_telephony_providers. For paycall pass publicConfig.baseUrl, the server address of that customer's tenant, e.g. https://master.ippbx.co.il/ippbx_api/v1.4/api/info (https only, must end with /api/info). Owner or admin of the app. Afterwards: get_telephony_connection shows connected, test_telephony_connection proves it, configure_telephony_mapping says where calls go.",
+    {
+      appId: TELEPHONY_APP_ID,
+      provider: z.string().describe("Provider id from list_telephony_providers, e.g. paycall"),
+      publicConfig: z
+        .record(z.string())
+        .optional()
+        .describe("Non-secret settings only, per the provider's fields, e.g. { baseUrl }"),
+      organizationId: TELEPHONY_ORG_ID,
+    },
+    async ({
+      appId,
+      provider,
+      publicConfig,
+      organizationId,
+    }: {
+      appId: string;
+      provider: string;
+      publicConfig?: Record<string, string>;
+      organizationId?: string;
+    }) => {
+      const orgId = await resolveOrg(organizationId);
+      return ok(
+        await getApi().request(
+          "POST",
+          `/organizations/${orgId}/apps/${appId}/telephony/connect-link`,
+          { provider, publicConfig },
+        ),
+      );
+    },
+  );
+
+  tool(
+    "test_telephony_connection",
+    "Check the stored token against the customer's phone system: a one-day call log read. Answers { ok, message } with a Hebrew message that can be shown to the customer as is, and records the result on the connection. It only reads from the PBX. Owner or admin of the app.",
+    { appId: TELEPHONY_APP_ID, organizationId: TELEPHONY_ORG_ID },
+    async ({ appId, organizationId }: { appId: string; organizationId?: string }) => {
+      const orgId = await resolveOrg(organizationId);
+      return ok(
+        await getApi().request("POST", `/organizations/${orgId}/apps/${appId}/telephony/test`),
+      );
+    },
+  );
+
+  tool(
+    "configure_telephony_mapping",
+    "Say where the calls go: the board that receives one row per call, which column gets which call field, and, optionally, how a call is linked to a customer (by the other party's phone number, Israeli numbers compared in one normal form: 05x, +9725x, 9725x) and to an employee (by the extension number). Replaces the whole mapping. Column ids from get_board_schema; the boards must be in the app's project. Call fields: externalId (the PBX call id, map it to keep rows traceable), direction, from, to, extension, agentName, startedAt, answeredAt, endedAt (ISO UTC times, use date/datetime columns), durationSec, talkSec (numbers), status, hangupBy. direction and status are written as Hebrew words (נכנסת/יוצאת, נענתה/לא נענתה/תפוס/נכשלה); for a dropdown or status column whose options differ, set labels. customer: { boardId (the customers board), matchColumnId (its phone column), linkColumnId (a relation column on the calls board) }. employee: the same with the extension column of the employees board. A phone or extension that two rows share is not linked (never guessed). startDate (YYYY-MM-DD) is where the first sync starts, default 7 days back. Syncing happens in the background once the server runs the telephony worker; run_telephony_sync does it now. Owner or admin of the app.",
+    {
+      appId: TELEPHONY_APP_ID,
+      boardId: z.string().describe("The board that receives a row per call"),
+      columns: z
+        .object({
+          externalId: z.string().optional(),
+          direction: z.string().optional(),
+          from: z.string().optional(),
+          to: z.string().optional(),
+          extension: z.string().optional(),
+          agentName: z.string().optional(),
+          startedAt: z.string().optional(),
+          answeredAt: z.string().optional(),
+          endedAt: z.string().optional(),
+          durationSec: z.string().optional(),
+          talkSec: z.string().optional(),
+          status: z.string().optional(),
+          hangupBy: z.string().optional(),
+        })
+        .strict()
+        .describe("Call field -> column id on the board. At least one"),
+      labels: z
+        .object({
+          direction: z
+            .object({ inbound: z.string().optional(), outbound: z.string().optional() })
+            .strict()
+            .optional(),
+          status: z
+            .object({
+              answered: z.string().optional(),
+              missed: z.string().optional(),
+              busy: z.string().optional(),
+              failed: z.string().optional(),
+            })
+            .strict()
+            .optional(),
+        })
+        .strict()
+        .optional()
+        .describe("Text written for direction and status, to match a closed-choice column's options"),
+      customer: z
+        .object({ boardId: z.string(), matchColumnId: z.string(), linkColumnId: z.string() })
+        .strict()
+        .optional()
+        .describe("Link calls to customers by phone"),
+      employee: z
+        .object({ boardId: z.string(), matchColumnId: z.string(), linkColumnId: z.string() })
+        .strict()
+        .optional()
+        .describe("Link calls to employees by extension"),
+      startDate: z
+        .string()
+        .regex(/^\d{4}-\d{2}-\d{2}$/)
+        .optional()
+        .describe("First day to sync, YYYY-MM-DD"),
+      organizationId: TELEPHONY_ORG_ID,
+    },
+    async ({
+      appId,
+      organizationId,
+      ...mapping
+    }: {
+      appId: string;
+      organizationId?: string;
+      [key: string]: unknown;
+    }) => {
+      const orgId = await resolveOrg(organizationId);
+      return ok(
+        await getApi().request(
+          "PUT",
+          `/organizations/${orgId}/apps/${appId}/telephony/mapping`,
+          mapping,
+        ),
+      );
+    },
+  );
+
+  tool(
+    "preview_telephony_sync",
+    "Read-only for TaskLite: reads the call log from the customer's PBX for a range and shows what a sync would write, without writing anything or moving the sync position. Returns counts (fetched, already on the board) and the last 20 calls as board rows (title, cells by column id, the customer and employee matched). Works before a mapping exists (then rows come back unmapped), so use it to look at the real calls first. from and to are local days (YYYY-MM-DD), up to 31 days back; omit both for the same window a scheduled sync would read. Owner or admin of the app.",
+    {
+      appId: TELEPHONY_APP_ID,
+      from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().describe("First local day, YYYY-MM-DD"),
+      to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().describe("Last local day, YYYY-MM-DD"),
+      organizationId: TELEPHONY_ORG_ID,
+    },
+    async ({
+      appId,
+      from,
+      to,
+      organizationId,
+    }: {
+      appId: string;
+      from?: string;
+      to?: string;
+      organizationId?: string;
+    }) => {
+      const orgId = await resolveOrg(organizationId);
+      return ok(
+        await getApi().request("POST", `/organizations/${orgId}/apps/${appId}/telephony/sync`, {
+          from,
+          to,
+          dryRun: true,
+        }),
+      );
+    },
+  );
+
+  tool(
+    "run_telephony_sync",
+    "Sync now: read the call log from the PBX and write each new call as a row on the mapped board, as the signed-in user, through the board's normal path (so the board's automations run for every new row). Safe to repeat: a call already written is never written twice (deduped by the PBX call id), and a call the board refused is retried on the next run. With no range it reads from the saved position, otherwise from and to (local days, up to 31 days back) as a catch-up that leaves the position alone. At most 500 rows per run; run again for the rest. Look with preview_telephony_sync first. Needs a connected, mapped connection. Owner or admin of the app.",
+    {
+      appId: TELEPHONY_APP_ID,
+      from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().describe("First local day, YYYY-MM-DD"),
+      to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().describe("Last local day, YYYY-MM-DD"),
+      organizationId: TELEPHONY_ORG_ID,
+    },
+    async ({
+      appId,
+      from,
+      to,
+      organizationId,
+    }: {
+      appId: string;
+      from?: string;
+      to?: string;
+      organizationId?: string;
+    }) => {
+      const orgId = await resolveOrg(organizationId);
+      return ok(
+        await getApi().request("POST", `/organizations/${orgId}/apps/${appId}/telephony/sync`, {
+          from,
+          to,
+          dryRun: false,
+        }),
+      );
+    },
+  );
+
+  tool(
+    "disconnect_telephony",
+    "Remove the phone system connection of an app: the stored token, the mapping and the record of which calls were written are deleted, and syncing stops. Rows already written to the board stay. Reconnecting later starts from start_telephony_connection and may write the recent calls again. Owner or admin of the app.",
+    { appId: TELEPHONY_APP_ID, organizationId: TELEPHONY_ORG_ID },
+    async ({ appId, organizationId }: { appId: string; organizationId?: string }) => {
+      const orgId = await resolveOrg(organizationId);
+      await getApi().request("DELETE", `/organizations/${orgId}/apps/${appId}/telephony/connection`);
+      return ok({ disconnected: true });
     },
   );
 
