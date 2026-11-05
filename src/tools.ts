@@ -2881,7 +2881,7 @@ export function registerTools(
 
   tool(
     "create_signature_request",
-    "Send a PDF for electronic signature and get the signing links back. One call: the PDF (an attachment already on an item, see list_uploaded_files / request_file_upload, or the bytes as base64), the signers, and optionally the row it belongs to. Each signer opens a personal link with an expiry, confirms a one-time code sent to their email or WhatsApp, reads the document and signs; the platform then seals the PDF with an evidence page and emails every signer the signed copy. With no fields, a signature page (name, signature, date per signer) is added at the end, so \"read, then sign at the end\" needs no coordinates. With itemId and signedFileColumnId (a file column on that item's board), the signed PDF is added to that cell when everyone has signed: build what happens next as an automation on \"column value changed\" of that column (set a status, notify, webhook). sendEmail=false skips the invitation emails and the links are yours to hand over (WhatsApp, open on the agent's phone). For a customer app the same thing is in its own API: /api/_esign (script /api/_esign/sign, TaskLiteSign).",
+    "Send a PDF for electronic signature and get the signing links back. One call: the PDF (an attachment already on an item, see list_uploaded_files / request_file_upload, or the bytes as base64), the signers, and optionally the row it belongs to. Each signer opens a personal link with an expiry, confirms a one-time code, reads the document and signs; the platform then seals the PDF with an evidence page and emails every signer the signed copy. With no fields, a signature page (name, signature, date per signer) is added at the end, so \"read, then sign at the end\" needs no coordinates. With itemId and signedFileColumnId (a file column on that item's board), the signed PDF is added to that cell when everyone has signed: build what happens next as an automation on \"column value changed\" of that column (set a status, notify, webhook). Delivery: by default the invitation and the code go to each signer's email. Per signer, channel=\"sms\" or \"whatsapp\" (with a phone) sends them there instead; the invitation by WhatsApp only reaches a person who wrote to our number in the last day, and SMS reaches Israeli mobile numbers only. When the channel cannot be used, or the daily limit for SMS and WhatsApp is spent (per organization and per number, set by the platform), the platform falls back to email and records that in the audit trail. The one-time code never goes to the same channel as the link: with the link on SMS the code is tried on WhatsApp, with the link on WhatsApp on SMS, otherwise email. declinedValue must be an existing label for a status, dropdown or label column. If a signer declines, the document is stopped, the sender is emailed with the reason, and with declinedColumnId (a status, dropdown, label or text column on the item's board) the item gets declinedValue there (default text: declined), like the signed file does. sendEmail=false skips the invitation messages and the links are yours to hand over (open on the agent's phone). For a customer app the same thing is in its own API: /api/_esign (script /api/_esign/sign, TaskLiteSign).",
     {
       title: z.string().min(1).max(255).describe("Document title, shown to signers"),
       message: z
@@ -2902,8 +2902,14 @@ export function registerTools(
             email: z
               .string()
               .email()
-              .describe("Required: the code (unless WhatsApp) and the signed copy go here"),
-            phone: z.string().optional().describe("E.164, for a WhatsApp code"),
+              .describe("Required: the invitation and code go here by default, and the signed copy always"),
+            phone: z.string().optional().describe("Needed for channel sms or whatsapp"),
+            channel: z
+              .enum(["email", "sms", "whatsapp"])
+              .optional()
+              .describe(
+                "How the invitation and the one-time code reach this signer. Default email. Falls back to email when sms or whatsapp cannot be used (no phone, not an Israeli mobile for sms, outside the WhatsApp 24 hour window, not configured, daily limit reached)",
+              ),
             order: z
               .number()
               .int()
@@ -2936,6 +2942,15 @@ export function registerTools(
         .string()
         .optional()
         .describe("File column on the item's board that receives the signed PDF"),
+      declinedColumnId: z
+        .string()
+        .optional()
+        .describe("Status, dropdown, label or text column on the item's board that records a decline"),
+      declinedValue: z
+        .string()
+        .max(200)
+        .optional()
+        .describe("What to write in declinedColumnId when a signer declines (must be a valid label for a status column). Default: a text saying the signer declined"),
       expiryDays: z
         .number()
         .int()
@@ -2967,10 +2982,18 @@ export function registerTools(
       pdfAttachmentId?: string;
       pdfBase64?: string;
       fileName?: string;
-      signers: Array<{ name: string; email: string; phone?: string; order?: number }>;
+      signers: Array<{
+        name: string;
+        email: string;
+        phone?: string;
+        order?: number;
+        channel?: "email" | "sms" | "whatsapp";
+      }>;
       fields?: unknown[];
       itemId?: string;
       signedFileColumnId?: string;
+      declinedColumnId?: string;
+      declinedValue?: string;
       expiryDays?: number;
       sendEmail?: boolean;
       sendSignedCopy?: boolean;
@@ -2994,6 +3017,8 @@ export function registerTools(
           fields: a.fields,
           itemId: a.itemId,
           signedFileColumnId: a.signedFileColumnId,
+          declinedColumnId: a.declinedColumnId,
+          declinedValue: a.declinedValue,
           expiryDays: a.expiryDays,
           sendEmail: a.sendEmail,
           sendSignedCopy: a.sendSignedCopy,
