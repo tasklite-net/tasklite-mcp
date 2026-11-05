@@ -3799,7 +3799,7 @@ export function registerTools(
 
   tool(
     "import_monday",
-    "Move monday.com boards into TaskLite with the connected token: each board's groups, columns, rows, sub-items, updates (as comments) and automations. Runs in the background and returns at once; follow it with monday_import_status. A monday timeline becomes two date columns, people and formulas come over as text, files are not moved. Read the report back to the customer, including what was skipped and why.",
+    "Move monday.com boards into TaskLite with the connected token: each board's groups, columns, rows, sub-items, updates (as comments) and automations. Runs in the background and returns at once; follow it with monday_import_status. Before starting, ask the customer whether this organization sends rows to an outside service (a webhook, Zapier, Make): every imported row and comment reaches it as new, so have them turn it off until the import is done. A monday timeline becomes two date columns, people and formulas come over as text, files are not moved. Read the report back to the customer, including what was skipped and why.",
     {
       boardIds: z
         .array(z.string())
