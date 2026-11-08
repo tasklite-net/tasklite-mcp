@@ -37,7 +37,7 @@
   "main": "dist/index.js",
   "scripts": {
     "build": "tsc",
-    "test": "tsc && node --test test/tools.test.mjs test/bundle-parts.test.mjs",
+    "test": "tsc && node --test test/tools.test.mjs test/bundle-parts.test.mjs test/protocol-version.test.mjs",
     "start": "node dist/index.js",
     "dev": "tsc && node dist/index.js",
     "prepublishOnly": "npm test"

@@ -5,6 +5,12 @@ are folded into the next published one, so the numbers on npm may skip.
 
 ## Unreleased
 
+### Fixed
+- Hosted server (`mcp.tasklite.net`): a request whose `MCP-Protocol-Version` header is newer than
+  the SDK knows is answered as the latest supported version instead of being refused with 400
+  "Unsupported protocol version". The Codex connector (`openai-mcp/1.0.0`) sent such tool calls on
+  8.11.26 and a quarter of one customer's calls failed. Each unknown version is logged once.
+
 ### Changed
 - `configure_app_settings` and the server instructions describe `settings.ai.actions.<name>.files`
   and the `files`, `instruction` and `schema` fields of `_ai/v1/run`: extracting data from an
