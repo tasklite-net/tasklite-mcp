@@ -21,6 +21,7 @@ import { TaskLiteApi } from './api.js';
 import { registerTools } from './tools.js';
 import { VERSION } from './version.js';
 import { SERVER_INSTRUCTIONS } from './instructions.js';
+import { acceptUnknownProtocolVersion } from './protocol-version.js';
 
 // Discovery without a credential: initialize, ping and tools/list carry no
 // data, and directories / catalogs / client "test connection" buttons need
@@ -38,6 +39,9 @@ function isDiscoveryOnly(body: unknown): boolean {
   return msgs.length > 0 && msgs.every((m) => m && typeof m === 'object' && DISCOVERY_METHODS.has((m as { method?: string }).method ?? ''));
 }
 
+// Each unknown protocol version is logged once per process, the first 20 only:
+// the header is the caller's, and random values must not grow the set or the log.
+const loggedVersions = new Set<string>();
 const PORT = Number(process.env.PORT || 8811);
 
 function sendJson(res: http.ServerResponse, status: number, body: unknown, headers: Record<string, string> = {}) {
@@ -110,6 +114,11 @@ const server = http.createServer(async (req, res) => {
       { instructions: SERVER_INSTRUCTIONS },
     );
     registerTools(mcp, getApi); // no onboarding tools in hosted mode, auth is the front door
+    const unknownVersion = acceptUnknownProtocolVersion(req);
+    if (unknownVersion && loggedVersions.size < 20 && !loggedVersions.has(unknownVersion)) {
+      loggedVersions.add(unknownVersion);
+      console.error(`protocol version ${unknownVersion} (${req.headers['user-agent'] || '?'}) answered as the latest this SDK knows`);
+    }
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
     res.on('close', () => {
       transport.close();
