@@ -5,6 +5,8 @@ are folded into the next published one, so the numbers on npm may skip.
 
 ## Unreleased
 
+## 0.22.1, 2026-11-08
+
 ### Fixed
 - Hosted server (`mcp.tasklite.net`): a request whose `MCP-Protocol-Version` header is newer than
   the SDK knows is answered as the latest supported version instead of being refused with 400

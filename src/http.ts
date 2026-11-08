@@ -39,7 +39,8 @@ function isDiscoveryOnly(body: unknown): boolean {
   return msgs.length > 0 && msgs.every((m) => m && typeof m === 'object' && DISCOVERY_METHODS.has((m as { method?: string }).method ?? ''));
 }
 
-// Each unknown protocol version is logged once per process.
+// Each unknown protocol version is logged once per process, the first 20 only:
+// the header is the caller's, and random values must not grow the set or the log.
 const loggedVersions = new Set<string>();
 const PORT = Number(process.env.PORT || 8811);
 
@@ -114,7 +115,7 @@ const server = http.createServer(async (req, res) => {
     );
     registerTools(mcp, getApi); // no onboarding tools in hosted mode, auth is the front door
     const unknownVersion = acceptUnknownProtocolVersion(req);
-    if (unknownVersion && !loggedVersions.has(unknownVersion)) {
+    if (unknownVersion && loggedVersions.size < 20 && !loggedVersions.has(unknownVersion)) {
       loggedVersions.add(unknownVersion);
       console.error(`protocol version ${unknownVersion} (${req.headers['user-agent'] || '?'}) answered as the latest this SDK knows`);
     }
