@@ -1840,7 +1840,7 @@ export function registerTools(
 
   tool(
     "create_column",
-    "Add a typed column to a board. Valid types: text, rich_text, number, status, date, datetime, duration, people, checkbox, dropdown, label, priority, link, email, phone, relation, lookup, rollup, formula, rating, currency, file. Choose by meaning, date for dates, phone for phones, number/currency for amounts, dropdown/status (with settings.options as an array of labels) for closed choices; text is for free text only. An obvious name/type mismatch is rejected with the suggested type; pass force:true to override. Rules go in settings.validation: { unique, min, max, minLength, maxLength, pattern, patternMessage }, enforced on every write (UI, MCP, App API). Closed choices (dropdown/status) reject values outside settings.options unless settings.allowCustom is true.",
+    "Add a typed column to a board. Valid types: text, rich_text, number, status, date, datetime, duration, people, checkbox, dropdown, label, priority, link, email, phone, relation, lookup, rollup, formula, rating, currency, file. Choose by meaning, date for dates, phone for phones, number/currency for amounts, dropdown/status (with settings.options as an array of labels) for closed choices; text is for free text only. An obvious name/type mismatch is rejected with the suggested type; pass force:true to override. Rules go in settings.validation: { unique, min, max, minLength, maxLength, pattern, patternMessage }, enforced on every write (UI, MCP, App API). Closed choices (dropdown/status) reject values outside settings.options unless settings.allowCustom is true. Sensitive identifiers (an Israeli ID number, a passport or account number) go in a sealed text column: settings.sealed: { normalize: \"il_id\" | \"digits\" | \"text\" }, usually with settings.validation.unique. The App API then stores only a keyed server-side fingerprint (hmac:v1:<hex>, under a secret key of the organization that never reaches the browser) and returns that on read; the page sends the plain value and must not hash it itself. A GET with filter[field]=<plain value> (eq, ne, in, empty) finds the row, a duplicate POST is refused with VALUE_NOT_UNIQUE, an invalid ID with INVALID_IL_ID. Every other write path (set_cell, create_item, the UI) refuses a plain value there (SEALED_COLUMN), and a column that already holds plain values cannot be sealed: create a new one.",
     {
       projectId: z
         .string()
@@ -1858,7 +1858,7 @@ export function registerTools(
         .record(z.any())
         .optional()
         .describe(
-          'Type-specific settings. For dropdown/status/priority: options, either as labels ["A","B"] or as full objects [{value,label,color}], labels are expanded server-side, and colors are assigned if you do not supply them.',
+          'Type-specific settings. For dropdown/status/priority: options, either as labels ["A","B"] or as full objects [{value,label,color}], labels are expanded server-side, and colors are assigned if you do not supply them. For a sealed text column (ID numbers): { sealed: { normalize: "il_id" }, validation: { unique: true } }.',
         ),
       isRequired: z
         .boolean()
@@ -2021,7 +2021,7 @@ export function registerTools(
         .record(z.unknown())
         .optional()
         .describe(
-          "Replaces the column settings, e.g. { options: [...] } for dropdown/status",
+          "Replaces the column settings, e.g. { options: [...] } for dropdown/status. A sealed column stays sealed unless the new settings say sealed: false; normalize cannot change once it holds values.",
         ),
       isRequired: z
         .boolean()
