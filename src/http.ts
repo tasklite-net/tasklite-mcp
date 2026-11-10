@@ -51,6 +51,10 @@ const HOST = process.env.HOST || '127.0.0.1';
 // deploy_frontend call with inline files (8 MB decoded, about 11 MB as base64).
 export const MAX_BODY_BYTES = 16 * 1024 * 1024;
 
+// How long, and how much, an oversized upload is still read (and thrown away) after the 413.
+const DRAIN_MS = 30_000;
+const DRAIN_BYTES = 128 * 1024 * 1024;
+
 export class BodyTooLargeError extends Error {}
 export class BadJsonError extends Error {}
 
@@ -143,9 +147,29 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
     body = await readBody(req);
   } catch (err) {
     if (err instanceof BodyTooLargeError) {
-      // The rest of the upload is discarded as it arrives (readBody), so the client gets to read this
-      // answer. A client that keeps sending is cut off after a few seconds.
-      setTimeout(() => req.destroy(), 5000).unref();
+      // The answer waits until the client has finished sending. A server that answers and closes while
+      // the upload is still arriving leaves unread data on the socket, the kernel then sends a reset,
+      // and the client loses the 413 it had not read yet (seen on Linux in CI, and on every platform
+      // when the request asks for Connection: close). The rest of the body is thrown away as it arrives
+      // (readBody); a client still sending after DRAIN_MS, or past DRAIN_BYTES, is answered and cut off.
+      await new Promise<void>((done) => {
+        if (req.readableEnded || req.destroyed) return done();
+        let drained = 0;
+        const giveUp = setTimeout(done, DRAIN_MS);
+        giveUp.unref();
+        const finish = () => {
+          clearTimeout(giveUp);
+          done();
+        };
+        req.on('data', (chunk: Buffer) => {
+          drained += chunk.length;
+          if (drained > DRAIN_BYTES) finish();
+        });
+        req.on('end', finish);
+        req.on('close', finish);
+        req.on('error', finish);
+      });
+      if (res.destroyed || res.headersSent) return;
       return sendJson(
         res,
         413,

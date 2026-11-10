@@ -73,9 +73,13 @@ test('malformed JSON gets a 400 parse error and the server keeps serving', async
   assert.equal(health, 200);
 });
 
-test('a body over the limit is refused with 413', async () => {
-  const res = await post(Buffer.alloc(17 * 1024 * 1024, 120), { authorization: 'Bearer tl_x' }).catch(() => ({ status: 0 }));
-  assert.equal(res.status, 413);
+// Repeated: the failure this guards against (a reset instead of the answer) was intermittent on Linux.
+test('a body over the limit is refused with 413, every time', async () => {
+  const big = Buffer.alloc(17 * 1024 * 1024, 120);
+  for (let i = 0; i < 12; i++) {
+    const res = await post(big, { authorization: 'Bearer tl_x' }).catch((e) => ({ status: 0, error: String(e && e.code) }));
+    assert.equal(res.status, 413, 'round ' + i + ' ' + (res.error || ''));
+  }
 });
 
 test('a streamed body with no declared length is cut off at the limit with 413', async () => {
