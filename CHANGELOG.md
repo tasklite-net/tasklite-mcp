@@ -5,6 +5,29 @@ are folded into the next published one, so the numbers on npm may skip.
 
 ## Unreleased
 
+## 0.22.2
+
+### Security
+- Hosted server: a malformed or oversized JSON body no longer takes the process down. The body is
+  capped at 16 MB (413 above it), bad JSON gets a 400 JSON-RPC parse error (-32700), every request
+  runs under a catch-all that answers 500 without internals, and `unhandledRejection` and
+  `uncaughtException` are logged instead of fatal. `requestTimeout` and `headersTimeout` are set.
+- Hosted server: listens on `127.0.0.1` by default instead of every interface. `HOST` overrides it.
+- Hosted server: `deploy_frontend` no longer offers `dir`, which read the server's own filesystem.
+  A call with `dir` is refused and names no path. The local stdio install keeps `dir`.
+- `deploy_frontend` `zipUrl`: https only; the host is resolved and refused if any address is
+  private, loopback, link-local, CGNAT, multicast or unspecified (IPv4, IPv6 and IPv4-mapped);
+  redirects are followed by hand (at most 3) and re-checked at every hop; the connection is pinned to
+  the checked address; the body is streamed and cut off at the bundle limit. Zip entries with
+  absolute paths or `..` segments are refused and a zip that unpacks over 300 MB is refused.
+- Ids supplied by the model (organization, app, project, board, item, document and the like) are
+  checked against `^[A-Za-z0-9_-]{1,128}# Changelog
+
+All notable changes to `@tasklite/mcp`. Versions that were never published
+are folded into the next published one, so the numbers on npm may skip.
+
+ before they go into a URL path.
+
 ## 0.22.1, 2026-11-08
 
 ### Fixed

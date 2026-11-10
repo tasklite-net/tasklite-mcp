@@ -43,22 +43,45 @@ function isDiscoveryOnly(body: unknown): boolean {
 // the header is the caller's, and random values must not grow the set or the log.
 const loggedVersions = new Set<string>();
 const PORT = Number(process.env.PORT || 8811);
+// Loopback by default: nginx on the same box is the only intended client.
+// Set HOST (for example 0.0.0.0 in a container) to listen elsewhere.
+const HOST = process.env.HOST || '127.0.0.1';
+
+// The largest JSON-RPC body accepted. The biggest legitimate one is a
+// deploy_frontend call with inline files (8 MB decoded, about 11 MB as base64).
+export const MAX_BODY_BYTES = 16 * 1024 * 1024;
+
+export class BodyTooLargeError extends Error {}
+export class BadJsonError extends Error {}
 
 function sendJson(res: http.ServerResponse, status: number, body: unknown, headers: Record<string, string> = {}) {
   res.writeHead(status, { 'Content-Type': 'application/json', ...headers });
   res.end(JSON.stringify(body));
 }
 
-async function readBody(req: http.IncomingMessage): Promise<unknown> {
-  let raw = '';
-  for await (const chunk of req) raw += chunk;
-  return raw ? JSON.parse(raw) : undefined;
+export async function readBody(req: http.IncomingMessage, maxBytes = MAX_BODY_BYTES): Promise<unknown> {
+  const declared = Number(req.headers['content-length'] || 0);
+  if (declared > maxBytes) throw new BodyTooLargeError();
+  const chunks: Buffer[] = [];
+  let total = 0;
+  for await (const chunk of req) {
+    total += chunk.length;
+    if (total > maxBytes) throw new BodyTooLargeError();
+    chunks.push(Buffer.from(chunk));
+  }
+  const raw = Buffer.concat(chunks).toString('utf8');
+  if (!raw) return undefined;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    throw new BadJsonError();
+  }
 }
 
 const API_URL = (process.env.TASKLITE_API_URL || 'https://api.tasklite.net').replace(/\/+$/, '');
 const RESOURCE_URL = (process.env.MCP_RESOURCE_URL || 'https://mcp.tasklite.net').replace(/\/+$/, '');
 
-const server = http.createServer(async (req, res) => {
+async function handle(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
   const url = new URL(req.url || '/', 'http://localhost');
 
   if (url.pathname === '/health') {
@@ -90,7 +113,24 @@ const server = http.createServer(async (req, res) => {
 
   const auth = req.headers['authorization'];
   const credential = auth?.startsWith('Bearer ') ? auth.slice(7).trim() : '';
-  const body = await readBody(req);
+  let body: unknown;
+  try {
+    body = await readBody(req);
+  } catch (err) {
+    if (err instanceof BodyTooLargeError) {
+      // The rest of the upload is not read; closing the connection stops it.
+      return sendJson(
+        res,
+        413,
+        { jsonrpc: '2.0', error: { code: -32600, message: 'Request body too large' }, id: null },
+        { Connection: 'close' },
+      );
+    }
+    if (err instanceof BadJsonError) {
+      return sendJson(res, 400, { jsonrpc: '2.0', error: { code: -32700, message: 'Parse error' }, id: null });
+    }
+    throw err;
+  }
   if (!credential && !isDiscoveryOnly(body)) {
     // Point clients at the resource metadata so they can start the OAuth flow.
     return sendJson(
@@ -113,7 +153,7 @@ const server = http.createServer(async (req, res) => {
       { name: 'tasklite', version: VERSION },
       { instructions: SERVER_INSTRUCTIONS },
     );
-    registerTools(mcp, getApi); // no onboarding tools in hosted mode, auth is the front door
+    registerTools(mcp, getApi, undefined, { hosted: true }); // no onboarding tools in hosted mode, auth is the front door
     const unknownVersion = acceptUnknownProtocolVersion(req);
     if (unknownVersion && loggedVersions.size < 20 && !loggedVersions.has(unknownVersion)) {
       loggedVersions.add(unknownVersion);
@@ -130,13 +170,42 @@ const server = http.createServer(async (req, res) => {
     if (!res.headersSent) {
       sendJson(res, 500, {
         jsonrpc: '2.0',
-        error: { code: -32603, message: `Internal error: ${(err as Error).message}` },
+        error: { code: -32603, message: 'Internal error' },
         id: null,
       });
     }
   }
+}
+
+const server = http.createServer((req, res) => {
+  // No rejection may escape a request: it would take the whole process down.
+  handle(req, res).catch((err) => {
+    console.error('request failed:', err);
+    try {
+      if (!res.headersSent) {
+        sendJson(res, 500, { jsonrpc: '2.0', error: { code: -32603, message: 'Internal error' }, id: null });
+      } else {
+        res.end();
+      }
+    } catch {
+      /* the socket is already gone */
+    }
+  });
 });
 
-server.listen(PORT, () => {
-  console.error(`TaskLite MCP hosted server listening on :${PORT} (POST /mcp)`);
+// Slow or stalled clients must not hold sockets open forever. The request
+// timeout covers a full 16 MB upload on a slow link.
+server.requestTimeout = 120_000;
+server.headersTimeout = 30_000;
+
+// Log and keep serving: one bad request must never end the process for every customer.
+process.on('unhandledRejection', (reason) => {
+  console.error('unhandledRejection:', reason);
+});
+process.on('uncaughtException', (err) => {
+  console.error('uncaughtException:', err);
+});
+
+server.listen(PORT, HOST, () => {
+  console.error(`TaskLite MCP hosted server listening on ${HOST}:${PORT} (POST /mcp)`);
 });
