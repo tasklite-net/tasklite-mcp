@@ -119,6 +119,12 @@ claude mcp add --transport http tasklite https://mcp.tasklite.net/mcp \
 The hosted server is stateless: every request carries its own credential, so
 one endpoint serves every account safely.
 
+If you run the hosted server yourself (`node dist/http.js`), it listens on
+`127.0.0.1:8811` by default, meant to sit behind a reverse proxy. Set `PORT` to
+change the port and `HOST` (for example `HOST=0.0.0.0` in a container) to listen on
+other interfaces. The hosted server does not offer `deploy_frontend` with `dir`
+(it would read the server's own disk); use `files` or `zipUrl` there.
+
 **Simplest of all: the connector.** In Claude (claude.ai or the desktop app),
 Settings → Connectors → add TaskLite, or add it by address using the URL above.
 You sign in once over OAuth; there is no key to create or store. Note that the

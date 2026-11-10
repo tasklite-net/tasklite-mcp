@@ -9,6 +9,7 @@ import { existsSync, statSync } from "node:fs";
 import { resolve as resolvePath, join as joinPath } from "node:path";
 import AdmZip from "adm-zip";
 import { packParts } from "./bundle-parts.js";
+import { downloadPublicZip } from "./safe-fetch.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import {
@@ -56,6 +57,21 @@ function signatureView(doc: Record<string, any>) {
       declinedAt: s.declinedAt ?? null,
     })),
   };
+}
+
+const ID_SEGMENT = /^[A-Za-z0-9_-]{1,128}$/;
+
+/**
+ * An id the caller supplied, checked before it goes into a URL path. Ids from
+ * the model must never carry a slash, a dot segment or a query string.
+ */
+export function idSeg(value: unknown): string {
+  if (typeof value !== "string" || !ID_SEGMENT.test(value)) {
+    throw new Error(
+      "Invalid id: use the id exactly as a list tool returned it (letters, digits, - and _ only, up to 128 characters).",
+    );
+  }
+  return value;
 }
 
 function ok(data: unknown): { content: Array<{ type: "text"; text: string }> } {
@@ -270,7 +286,7 @@ async function refuseStatusOnDataBoard(
   try {
     board = await api.request<any>(
       "GET",
-      `/projects/${projectId}/boards/${boardId}`,
+      `/projects/${idSeg(projectId)}/boards/${idSeg(boardId)}`,
     );
   } catch {
     return;
@@ -279,7 +295,7 @@ async function refuseStatusOnDataBoard(
   let where = "";
   try {
     const cols = columnsOf(
-      await api.request("GET", `/projects/${projectId}/boards/${boardId}/columns`),
+      await api.request("GET", `/projects/${idSeg(projectId)}/boards/${idSeg(boardId)}/columns`),
     );
     const kind = statusColumnKind(cols);
     const column =
@@ -1431,11 +1447,67 @@ function checkCrossBoardActions(
   return null;
 }
 
+// Shared by the three deploy_frontend inputs: the zip must serve index.html
+// at its root. A zip whose only top-level entry is a folder (how most
+// exporters and GitHub pack a build) is re-rooted rather than rejected.
+// The sum of the declared uncompressed sizes of a zip's entries (a zip bomb guard).
+export const MAX_UNCOMPRESSED = 300 * 1024 * 1024;
+export const normalizeBundle = (zip: AdmZip): AdmZip => {
+  const all = zip.getEntries();
+  let uncompressed = 0;
+  for (const e of all) {
+    const name = e.entryName.replace(/\\/g, "/");
+    if (
+      name.startsWith("/") ||
+      /^[A-Za-z]:/.test(name) ||
+      name.split("/").some((seg) => seg === "..")
+    ) {
+      throw new Error(
+        "The zip has an entry with an absolute path or a .. segment, which is not allowed.",
+      );
+    }
+    uncompressed += e.header.size;
+  }
+  if (uncompressed > MAX_UNCOMPRESSED) {
+    throw new Error(
+      `The zip unpacks to ${Math.round(uncompressed / 1024 / 1024)}MB, over the ${MAX_UNCOMPRESSED / 1024 / 1024}MB limit.`,
+    );
+  }
+  const entries = all.filter(
+    (e) => !e.isDirectory && !e.entryName.startsWith("__MACOSX/"),
+  );
+  if (entries.some((e) => e.entryName === "index.html")) return zip;
+  const tops = new Set(entries.map((e) => e.entryName.split("/")[0]));
+  if (tops.size === 1) {
+    const [top] = [...tops];
+    if (entries.some((e) => e.entryName === `${top}/index.html`)) {
+      const out = new AdmZip();
+      for (const e of entries)
+        out.addFile(e.entryName.slice(top.length + 1), e.getData());
+      return out;
+    }
+  }
+  throw new Error(
+    "The bundle has no index.html at its root. Pass the build OUTPUT (dist/, build/, out/), not the project source.",
+  );
+};
+
+export interface RegisterOptions {
+  /**
+   * True for the hosted HTTP server. Tools that would read the server's own
+   * filesystem (deploy_frontend `dir`) are not offered there. Defaults to
+   * false: the stdio entry runs on the user's own machine.
+   */
+  hosted?: boolean;
+}
+
 export function registerTools(
   server: McpServer,
   getApi: GetApi,
   onboarding?: OnboardingHooks,
+  options: RegisterOptions = {},
 ): void {
+  const hosted = options.hosted === true;
   // Wrap server.tool to inject the per-tool annotations (5-arg overload).
   const tool = (
     name: string,
@@ -1731,7 +1803,7 @@ export function registerTools(
     async ({ organizationId }) => {
       const orgId = await resolveOrg(organizationId);
       return ok(
-        await getApi().request("GET", `/organizations/${orgId}/email/usage`),
+        await getApi().request("GET", `/organizations/${idSeg(orgId)}/email/usage`),
       );
     },
   );
@@ -1773,10 +1845,10 @@ export function registerTools(
       }
       const org =
         Object.keys(settings).length > 0
-          ? await getApi().request<any>("PATCH", `/organizations/${orgId}`, {
+          ? await getApi().request<any>("PATCH", `/organizations/${idSeg(orgId)}`, {
               settings,
             })
-          : await getApi().request<any>("GET", `/organizations/${orgId}`);
+          : await getApi().request<any>("GET", `/organizations/${idSeg(orgId)}`);
       const current = (org && org.settings) || {};
       return ok({
         organizationId: orgId,
@@ -1817,7 +1889,7 @@ export function registerTools(
       return ok(
         await getApi().request(
           "GET",
-          `/organizations/${orgId}/projects${suffix}`,
+          `/organizations/${idSeg(orgId)}/projects${suffix}`,
         ),
       );
     },
@@ -1839,7 +1911,7 @@ export function registerTools(
       if (limit) qs.set("limit", String(limit));
       const suffix = qs.toString() ? `?${qs}` : "";
       return ok(
-        await getApi().request("GET", `/projects/${projectId}/boards${suffix}`),
+        await getApi().request("GET", `/projects/${idSeg(projectId)}/boards${suffix}`),
       );
     },
   );
@@ -1861,7 +1933,7 @@ export function registerTools(
       const orgId = await resolveOrg(organizationId);
       const project = await getApi().request<any>(
         "POST",
-        `/organizations/${orgId}/projects`,
+        `/organizations/${idSeg(orgId)}/projects`,
         {
           name,
           organizationId: orgId,
@@ -1894,7 +1966,7 @@ export function registerTools(
     async ({ projectId, name, description, kind }) => {
       const board = await getApi().request<any>(
         "POST",
-        `/projects/${projectId}/boards`,
+        `/projects/${idSeg(projectId)}/boards`,
         {
           name,
           projectId,
@@ -1904,7 +1976,7 @@ export function registerTools(
       );
       return ok({
         board,
-        adminUrl: getApi().appUrl(`/projects/${projectId}/boards/${board.id}`),
+        adminUrl: getApi().appUrl(`/projects/${idSeg(projectId)}/boards/${board.id}`),
       });
     },
   );
@@ -1954,7 +2026,7 @@ export function registerTools(
       }
       const column = await getApi().request<any>(
         "POST",
-        `/projects/${projectId}/boards/${boardId}/columns`,
+        `/projects/${idSeg(projectId)}/boards/${idSeg(boardId)}/columns`,
         {
           name,
           type,
@@ -1979,10 +2051,10 @@ export function registerTools(
     },
     async ({ projectId, boardId }) => {
       const [board, columns] = await Promise.all([
-        getApi().request("GET", `/projects/${projectId}/boards/${boardId}`),
+        getApi().request("GET", `/projects/${idSeg(projectId)}/boards/${idSeg(boardId)}`),
         getApi().request(
           "GET",
-          `/projects/${projectId}/boards/${boardId}/columns`,
+          `/projects/${idSeg(projectId)}/boards/${idSeg(boardId)}/columns`,
         ),
       ]);
       return ok({ board, columns });
@@ -2011,7 +2083,7 @@ export function registerTools(
       return ok(
         await getApi().request(
           "PATCH",
-          `/projects/${projectId}/boards/${boardId}`,
+          `/projects/${idSeg(projectId)}/boards/${idSeg(boardId)}`,
           body,
         ),
       );
@@ -2032,7 +2104,7 @@ export function registerTools(
     async ({ projectId, boardId }) => {
       await getApi().request(
         "DELETE",
-        `/projects/${projectId}/boards/${boardId}`,
+        `/projects/${idSeg(projectId)}/boards/${idSeg(boardId)}`,
       );
       return ok({ deleted: true, boardId });
     },
@@ -2062,7 +2134,7 @@ export function registerTools(
       const orgId = await resolveOrg(organizationId);
       await getApi().request(
         "DELETE",
-        `/organizations/${orgId}/projects/${projectId}`,
+        `/organizations/${idSeg(orgId)}/projects/${idSeg(projectId)}`,
       );
       return ok({
         deleted: true,
@@ -2113,7 +2185,7 @@ export function registerTools(
         // Sanity-check the resulting name/type pair the same way create_column does.
         const cols = await getApi().request<any>(
           "GET",
-          `/projects/${projectId}/boards/${boardId}/columns`,
+          `/projects/${idSeg(projectId)}/boards/${idSeg(boardId)}/columns`,
         );
         const list: any[] = Array.isArray(cols)
           ? cols
@@ -2133,7 +2205,7 @@ export function registerTools(
       return ok(
         await getApi().request(
           "PATCH",
-          `/projects/${projectId}/boards/${boardId}/columns/${columnId}`,
+          `/projects/${idSeg(projectId)}/boards/${idSeg(boardId)}/columns/${idSeg(columnId)}`,
           body,
         ),
       );
@@ -2155,7 +2227,7 @@ export function registerTools(
     async ({ projectId, boardId, columnId }) => {
       await getApi().request(
         "DELETE",
-        `/projects/${projectId}/boards/${boardId}/columns/${columnId}`,
+        `/projects/${idSeg(projectId)}/boards/${idSeg(boardId)}/columns/${idSeg(columnId)}`,
       );
       return ok({ deleted: true, columnId });
     },
@@ -2180,7 +2252,7 @@ export function registerTools(
       return ok(
         await getApi().request(
           "PUT",
-          `/projects/${projectId}/boards/${boardId}/columns/reorder`,
+          `/projects/${idSeg(projectId)}/boards/${idSeg(boardId)}/columns/reorder`,
           { columnIds },
         ),
       );
@@ -2210,7 +2282,7 @@ export function registerTools(
       const orgId = await resolveOrg(organizationId);
       const data = await getApi().request<any>(
         "GET",
-        `/organizations/${orgId}/projects/${projectId}/export.json`,
+        `/organizations/${idSeg(orgId)}/projects/${idSeg(projectId)}/export.json`,
       );
       const cap = maxItemsPerBoard ?? 200;
       let truncated = false;
@@ -2311,7 +2383,7 @@ export function registerTools(
       limit?: number;
       page?: number;
     }) => {
-      const base = `/projects/${projectId}/boards/${boardId}/items`;
+      const base = `/projects/${idSeg(projectId)}/boards/${idSeg(boardId)}/items`;
       const filters = new URLSearchParams();
       // A row of a data board is a record, not a task: the App API already
       // omits the built-in task fields for those boards, and this tool now
@@ -2322,7 +2394,7 @@ export function registerTools(
       try {
         board = await getApi().request<any>(
           "GET",
-          `/projects/${projectId}/boards/${boardId}`,
+          `/projects/${idSeg(projectId)}/boards/${idSeg(boardId)}`,
         );
         plain = board?.metadata?.kind === "data";
       } catch {
@@ -2344,7 +2416,7 @@ export function registerTools(
             boardColumns = columnsOf(
               await getApi().request(
                 "GET",
-                `/projects/${projectId}/boards/${boardId}/columns`,
+                `/projects/${idSeg(projectId)}/boards/${idSeg(boardId)}/columns`,
               ),
             );
           } catch {
@@ -2515,7 +2587,7 @@ export function registerTools(
       return ok(
         await getApi().request(
           "POST",
-          `/projects/${projectId}/boards/${boardId}/items`,
+          `/projects/${idSeg(projectId)}/boards/${idSeg(boardId)}/items`,
           body,
         ),
       );
@@ -2563,7 +2635,7 @@ export function registerTools(
       return ok(
         await getApi().request(
           "PATCH",
-          `/projects/${projectId}/boards/${boardId}/items/${itemId}`,
+          `/projects/${idSeg(projectId)}/boards/${idSeg(boardId)}/items/${idSeg(itemId)}`,
           body,
         ),
       );
@@ -2597,7 +2669,7 @@ export function registerTools(
       ok(
         await getApi().request(
           "PUT",
-          `/projects/${projectId}/boards/${boardId}/items/${itemId}/cells/by-column/${columnId}`,
+          `/projects/${idSeg(projectId)}/boards/${idSeg(boardId)}/items/${idSeg(itemId)}/cells/by-column/${idSeg(columnId)}`,
           { value },
         ),
       ),
@@ -2622,7 +2694,7 @@ export function registerTools(
     async ({ projectId, boardId, itemId, columnIds }) => {
       const rows = await getApi().request<
         Array<{ columnId?: string | null; value?: unknown }>
-      >("GET", `/projects/${projectId}/boards/${boardId}/items/${itemId}/cells`);
+      >("GET", `/projects/${idSeg(projectId)}/boards/${idSeg(boardId)}/items/${idSeg(itemId)}/cells`);
       const want = columnIds?.length
         ? new Set(columnIds.map((c: string) => c.toLowerCase()))
         : null;
@@ -2678,7 +2750,7 @@ export function registerTools(
         return ok(
           await getApi().request(
             "PUT",
-            `/projects/${projectId}/boards/${boardId}/items/${itemId}/cells/conditional`,
+            `/projects/${idSeg(projectId)}/boards/${idSeg(boardId)}/items/${idSeg(itemId)}/cells/conditional`,
             { cells },
           ),
         );
@@ -2726,7 +2798,7 @@ export function registerTools(
       ok(
         await getApi().request(
           "DELETE",
-          `/projects/${projectId}/boards/${boardId}/items/${itemId}`,
+          `/projects/${idSeg(projectId)}/boards/${idSeg(boardId)}/items/${idSeg(itemId)}`,
         ),
       ),
   );
@@ -2763,7 +2835,7 @@ export function registerTools(
       return ok(
         await getApi().request(
           "GET",
-          `/projects/${projectId}/items/${itemId}/comments${suffix}`,
+          `/projects/${idSeg(projectId)}/items/${idSeg(itemId)}/comments${suffix}`,
         ),
       );
     },
@@ -2791,7 +2863,7 @@ export function registerTools(
       ok(
         await getApi().request(
           "POST",
-          `/projects/${projectId}/items/${itemId}/comments`,
+          `/projects/${idSeg(projectId)}/items/${idSeg(itemId)}/comments`,
           {
             content,
             ...(mentionedUserIds ? { mentionedUserIds } : {}),
@@ -2816,7 +2888,7 @@ export function registerTools(
       ok(
         await getApi().request(
           "PATCH",
-          `/projects/${projectId}/items/${itemId}/comments/${commentId}`,
+          `/projects/${idSeg(projectId)}/items/${idSeg(itemId)}/comments/${idSeg(commentId)}`,
           { content },
         ),
       ),
@@ -2838,7 +2910,7 @@ export function registerTools(
       ok(
         await getApi().request(
           "DELETE",
-          `/projects/${projectId}/items/${itemId}/comments/${commentId}`,
+          `/projects/${idSeg(projectId)}/items/${idSeg(itemId)}/comments/${idSeg(commentId)}`,
         ),
       ),
   );
@@ -2923,8 +2995,8 @@ export function registerTools(
       // With an address the server sends the invitation itself; without one it
       // only mints the link and handing it over is the caller's business.
       const path = clientEmail
-        ? `/api/client-uploads/request-material?organizationId=${orgId}`
-        : `/api/client-uploads/tokens?organizationId=${orgId}`;
+        ? `/api/client-uploads/request-material?organizationId=${idSeg(orgId)}`
+        : `/api/client-uploads/tokens?organizationId=${idSeg(orgId)}`;
       const created = await getApi().request<{
         id: string;
         token: string;
@@ -2975,12 +3047,12 @@ export function registerTools(
         }>
       >(
         "GET",
-        `/api/attachments?entityType=item&entityId=${itemId}&organizationId=${orgId}`,
+        `/api/attachments?entityType=item&entityId=${idSeg(itemId)}&organizationId=${idSeg(orgId)}`,
       );
       const links = await getApi()
         .request<unknown>(
           "GET",
-          `/api/client-uploads/tokens/item/${itemId}?organizationId=${orgId}`,
+          `/api/client-uploads/tokens/item/${idSeg(itemId)}?organizationId=${idSeg(orgId)}`,
         )
         .catch(() => null);
       // One signing call per file, capped: a board's worth of URLs that nobody
@@ -2992,7 +3064,7 @@ export function registerTools(
           const signed = await getApi()
             .request<{ url: string }>(
               "GET",
-              `/api/attachments/${f.id}/download-url?organizationId=${orgId}`,
+              `/api/attachments/${f.id}/download-url?organizationId=${idSeg(orgId)}`,
             )
             .catch(() => null);
           return { ...f, downloadUrl: signed?.url ?? null };
@@ -3137,7 +3209,7 @@ export function registerTools(
       const orgId = await resolveOrg(a.organizationId);
       const created = await getApi().request<Record<string, unknown>>(
         "POST",
-        `/api/e-signature/requests?organizationId=${orgId}`,
+        `/api/e-signature/requests?organizationId=${idSeg(orgId)}`,
         {
           title: a.title,
           message: a.message,
@@ -3209,14 +3281,14 @@ export function registerTools(
       const orgId = await resolveOrg(organizationId);
       const doc = await getApi().request<Record<string, any>>(
         "GET",
-        `/api/e-signature/documents/${documentId}?organizationId=${orgId}`,
+        `/api/e-signature/documents/${idSeg(documentId)}?organizationId=${idSeg(orgId)}`,
       );
       const view = signatureView(doc);
       if (doc?.finalS3Key) {
         const signed = await getApi()
           .request<{ url: string }>(
             "GET",
-            `/api/e-signature/documents/${documentId}/final?organizationId=${orgId}`,
+            `/api/e-signature/documents/${idSeg(documentId)}/final?organizationId=${idSeg(orgId)}`,
           )
           .catch(() => null);
         return ok({ ...view, signedFileUrl: signed?.url ?? null });
@@ -3249,7 +3321,7 @@ export function registerTools(
       return ok(
         await getApi().request(
           "POST",
-          `/api/e-signature/requests/${documentId}/link?organizationId=${orgId}`,
+          `/api/e-signature/requests/${idSeg(documentId)}/link?organizationId=${idSeg(orgId)}`,
           { signerId },
         ),
       );
@@ -3279,7 +3351,7 @@ export function registerTools(
       const orgId = await resolveOrg(organizationId);
       const doc = await getApi().request<Record<string, any>>(
         "POST",
-        `/api/e-signature/documents/${documentId}/void?organizationId=${orgId}`,
+        `/api/e-signature/documents/${idSeg(documentId)}/void?organizationId=${idSeg(orgId)}`,
         { reason },
       );
       return ok(signatureView(doc));
@@ -3311,7 +3383,7 @@ export function registerTools(
     { appId: TELEPHONY_APP_ID, organizationId: TELEPHONY_ORG_ID },
     async ({ appId, organizationId }: { appId: string; organizationId?: string }) => {
       const orgId = await resolveOrg(organizationId);
-      return ok(await getApi().request("GET", `/organizations/${orgId}/apps/${appId}/telephony`));
+      return ok(await getApi().request("GET", `/organizations/${idSeg(orgId)}/apps/${idSeg(appId)}/telephony`));
     },
   );
 
@@ -3342,7 +3414,7 @@ export function registerTools(
       return ok(
         await getApi().request(
           "POST",
-          `/organizations/${orgId}/apps/${appId}/telephony/connect-link`,
+          `/organizations/${idSeg(orgId)}/apps/${idSeg(appId)}/telephony/connect-link`,
           { provider, publicConfig },
         ),
       );
@@ -3356,7 +3428,7 @@ export function registerTools(
     async ({ appId, organizationId }: { appId: string; organizationId?: string }) => {
       const orgId = await resolveOrg(organizationId);
       return ok(
-        await getApi().request("POST", `/organizations/${orgId}/apps/${appId}/telephony/test`),
+        await getApi().request("POST", `/organizations/${idSeg(orgId)}/apps/${idSeg(appId)}/telephony/test`),
       );
     },
   );
@@ -3434,7 +3506,7 @@ export function registerTools(
       return ok(
         await getApi().request(
           "PUT",
-          `/organizations/${orgId}/apps/${appId}/telephony/mapping`,
+          `/organizations/${idSeg(orgId)}/apps/${idSeg(appId)}/telephony/mapping`,
           mapping,
         ),
       );
@@ -3463,7 +3535,7 @@ export function registerTools(
     }) => {
       const orgId = await resolveOrg(organizationId);
       return ok(
-        await getApi().request("POST", `/organizations/${orgId}/apps/${appId}/telephony/sync`, {
+        await getApi().request("POST", `/organizations/${idSeg(orgId)}/apps/${idSeg(appId)}/telephony/sync`, {
           from,
           to,
           dryRun: true,
@@ -3494,7 +3566,7 @@ export function registerTools(
     }) => {
       const orgId = await resolveOrg(organizationId);
       return ok(
-        await getApi().request("POST", `/organizations/${orgId}/apps/${appId}/telephony/sync`, {
+        await getApi().request("POST", `/organizations/${idSeg(orgId)}/apps/${idSeg(appId)}/telephony/sync`, {
           from,
           to,
           dryRun: false,
@@ -3509,7 +3581,7 @@ export function registerTools(
     { appId: TELEPHONY_APP_ID, organizationId: TELEPHONY_ORG_ID },
     async ({ appId, organizationId }: { appId: string; organizationId?: string }) => {
       const orgId = await resolveOrg(organizationId);
-      await getApi().request("DELETE", `/organizations/${orgId}/apps/${appId}/telephony/connection`);
+      await getApi().request("DELETE", `/organizations/${idSeg(orgId)}/apps/${idSeg(appId)}/telephony/connection`);
       return ok({ disconnected: true });
     },
   );
@@ -3538,7 +3610,7 @@ export function registerTools(
       const orgId = await resolveOrg(organizationId);
       await getApi().request(
         "DELETE",
-        `/api/client-uploads/tokens/${tokenId}?organizationId=${orgId}`,
+        `/api/client-uploads/tokens/${idSeg(tokenId)}?organizationId=${idSeg(orgId)}`,
       );
       return ok({ revoked: true, tokenId });
     },
@@ -3565,7 +3637,7 @@ export function registerTools(
       const orgId = await resolveOrg(organizationId);
       const app = await getApi().request<any>(
         "POST",
-        `/organizations/${orgId}/apps`,
+        `/organizations/${idSeg(orgId)}/apps`,
         {
           name,
           projectId,
@@ -3599,7 +3671,7 @@ export function registerTools(
       const orgId = await resolveOrg(organizationId);
       const status = await getApi().request<any>(
         "GET",
-        `/organizations/${orgId}/apps/${appId}/push`,
+        `/organizations/${idSeg(orgId)}/apps/${idSeg(appId)}/push`,
       );
       return ok({
         ...status,
@@ -3662,7 +3734,7 @@ export function registerTools(
       const orgId = await resolveOrg(organizationId);
       const res = await getApi().request<any>(
         "POST",
-        `/organizations/${orgId}/apps/${appId}/push/test`,
+        `/organizations/${idSeg(orgId)}/apps/${idSeg(appId)}/push/test`,
         {
           userIds,
           title,
@@ -3696,7 +3768,7 @@ export function registerTools(
       return ok(
         await getApi().request(
           "POST",
-          `/organizations/${orgId}/apps/${appId}/publish`,
+          `/organizations/${idSeg(orgId)}/apps/${idSeg(appId)}/publish`,
           {},
         ),
       );
@@ -3769,7 +3841,7 @@ export function registerTools(
       return ok(
         await getApi().request(
           "POST",
-          `/organizations/${orgId}/apps/${appId}/endpoints`,
+          `/organizations/${idSeg(orgId)}/apps/${idSeg(appId)}/endpoints`,
           body,
         ),
       );
@@ -3795,7 +3867,7 @@ export function registerTools(
       return ok(
         await getApi().request(
           "GET",
-          `/organizations/${orgId}/apps/${appId}/endpoints`,
+          `/organizations/${idSeg(orgId)}/apps/${idSeg(appId)}/endpoints`,
         ),
       );
     },
@@ -3860,7 +3932,7 @@ export function registerTools(
       return ok(
         await getApi().request(
           "PATCH",
-          `/organizations/${orgId}/apps/${appId}/endpoints/${endpointId}`,
+          `/organizations/${idSeg(orgId)}/apps/${idSeg(appId)}/endpoints/${idSeg(endpointId)}`,
           body,
         ),
       );
@@ -3886,7 +3958,7 @@ export function registerTools(
       const orgId = await resolveOrg(organizationId);
       await getApi().request(
         "DELETE",
-        `/organizations/${orgId}/apps/${appId}/endpoints/${endpointId}`,
+        `/organizations/${idSeg(orgId)}/apps/${idSeg(appId)}/endpoints/${idSeg(endpointId)}`,
       );
       return ok({ deleted: true, endpointId });
     },
@@ -4314,7 +4386,7 @@ export function registerTools(
       const orgId = await resolveOrg(organizationId);
       const app = await getApi().request<any>(
         "GET",
-        `/organizations/${orgId}/apps/${appId}`,
+        `/organizations/${idSeg(orgId)}/apps/${idSeg(appId)}`,
       );
       const current: Record<string, unknown> =
         app && typeof app.settings === "object" && app.settings !== null
@@ -4326,7 +4398,7 @@ export function registerTools(
       const merged = mergeSettings(current, set);
       const updated = await getApi().request<any>(
         "PATCH",
-        `/organizations/${orgId}/apps/${appId}`,
+        `/organizations/${idSeg(orgId)}/apps/${idSeg(appId)}`,
         { settings: merged },
       );
       return ok({
@@ -4359,7 +4431,7 @@ export function registerTools(
     },
     async ({ appId, organizationId }) => {
       const orgId = await resolveOrg(organizationId);
-      const base = `/organizations/${orgId}/apps/${appId}/users`;
+      const base = `/organizations/${idSeg(orgId)}/apps/${idSeg(appId)}/users`;
       const [users, pending] = await Promise.all([
         getApi().request("GET", base),
         getApi().request("GET", `${base}/pending`),
@@ -4410,7 +4482,7 @@ export function registerTools(
       return ok(
         await getApi().request(
           "POST",
-          `/organizations/${orgId}/apps/${appId}/users`,
+          `/organizations/${idSeg(orgId)}/apps/${idSeg(appId)}/users`,
           body,
         ),
       );
@@ -4457,7 +4529,7 @@ export function registerTools(
       return ok(
         await getApi().request(
           "PATCH",
-          `/organizations/${orgId}/apps/${appId}/users/${userId}`,
+          `/organizations/${idSeg(orgId)}/apps/${idSeg(appId)}/users/${idSeg(userId)}`,
           body,
         ),
       );
@@ -4493,7 +4565,7 @@ export function registerTools(
         return ok({ error: "Pass exactly one of userId and pendingId." });
       }
       const orgId = await resolveOrg(organizationId);
-      const base = `/organizations/${orgId}/apps/${appId}/users`;
+      const base = `/organizations/${idSeg(orgId)}/apps/${idSeg(appId)}/users`;
       if (pendingId !== undefined) {
         return ok(await getApi().request("DELETE", `${base}/pending/${pendingId}`));
       }
@@ -4583,7 +4655,7 @@ export function registerTools(
       if (label !== undefined) body.label = label;
       const invite = await getApi().request<any>(
         "POST",
-        `/organizations/${orgId}/apps/${appId}/invites`,
+        `/organizations/${idSeg(orgId)}/apps/${idSeg(appId)}/invites`,
         body,
       );
       return ok({
@@ -4613,7 +4685,7 @@ export function registerTools(
       return ok(
         await getApi().request(
           "GET",
-          `/organizations/${orgId}/apps/${appId}/invites`,
+          `/organizations/${idSeg(orgId)}/apps/${idSeg(appId)}/invites`,
         ),
       );
     },
@@ -4641,7 +4713,7 @@ export function registerTools(
       return ok(
         await getApi().request(
           "DELETE",
-          `/organizations/${orgId}/apps/${appId}/invites/${inviteId}`,
+          `/organizations/${idSeg(orgId)}/apps/${idSeg(appId)}/invites/${idSeg(inviteId)}`,
         ),
       );
     },
@@ -4684,7 +4756,7 @@ export function registerTools(
       return ok(
         await getApi().request(
           "POST",
-          `/organizations/${orgId}/apps/${appId}/users/${userId}/links`,
+          `/organizations/${idSeg(orgId)}/apps/${idSeg(appId)}/users/${idSeg(userId)}/links`,
           { itemId },
         ),
       );
@@ -4713,7 +4785,7 @@ export function registerTools(
       return ok(
         await getApi().request(
           "GET",
-          `/organizations/${orgId}/apps/${appId}/users/${userId}/links`,
+          `/organizations/${idSeg(orgId)}/apps/${idSeg(appId)}/users/${idSeg(userId)}/links`,
         ),
       );
     },
@@ -4744,7 +4816,7 @@ export function registerTools(
       return ok(
         await getApi().request(
           "DELETE",
-          `/organizations/${orgId}/apps/${appId}/users/${userId}/links/${itemId}`,
+          `/organizations/${idSeg(orgId)}/apps/${idSeg(appId)}/users/${idSeg(userId)}/links/${idSeg(itemId)}`,
         ),
       );
     },
@@ -4755,7 +4827,7 @@ export function registerTools(
   // what a board policy says. All of the admin routes need organization owner
   // or admin.
   const permBase = (orgId: string, appId: string) =>
-    `/organizations/${orgId}/apps/${encodeURIComponent(appId)}/permissions`;
+    `/organizations/${idSeg(orgId)}/apps/${encodeURIComponent(appId)}/permissions`;
   // A refused policy comes back as 400 POLICY_INVALID with an errors list
   // naming each problem; the plain error message keeps only the headline, so
   // the whole body goes back for the builder to fix from.
@@ -5186,7 +5258,7 @@ Roles are keys from list_app_roles, plus "*" (any signed-in user) and "public". 
       return ok(
         await getApi().request(
           "GET",
-          `/organizations/${orgId}/items/${encodeURIComponent(itemId)}/history${qs ? `?${qs}` : ""}`,
+          `/organizations/${idSeg(orgId)}/items/${encodeURIComponent(itemId)}/history${qs ? `?${qs}` : ""}`,
         ),
       );
     },
@@ -5218,7 +5290,7 @@ Roles are keys from list_app_roles, plus "*" (any signed-in user) and "public". 
       return ok(
         await getApi().request(
           "POST",
-          `/organizations/${orgId}/apps/${appId}/api-keys`,
+          `/organizations/${idSeg(orgId)}/apps/${idSeg(appId)}/api-keys`,
           {
             name: name || "frontend",
             ...(scopes?.length ? { scopes } : {}),
@@ -5570,13 +5642,13 @@ Roles are keys from list_app_roles, plus "*" (any signed-in user) and "public". 
         try {
           const sub = await client.request<any>(
             "GET",
-            `/organizations/${orgId}/subscription`,
+            `/organizations/${idSeg(orgId)}/subscription`,
           );
           const allowed = sub?.plan?.features?.limits?.publishedApps;
           if (typeof allowed === "number") {
             const apps = await client.request<any>(
               "GET",
-              `/organizations/${orgId}/apps`,
+              `/organizations/${idSeg(orgId)}/apps`,
             );
             const list: any[] = Array.isArray(apps)
               ? apps
@@ -5602,7 +5674,7 @@ Roles are keys from list_app_roles, plus "*" (any signed-in user) and "public". 
       let createdAppId: string | undefined;
       const created = await client.request<any>(
         "POST",
-        `/organizations/${orgId}/projects`,
+        `/organizations/${idSeg(orgId)}/projects`,
         {
           name: project.name,
           organizationId: orgId,
@@ -5807,7 +5879,7 @@ Roles are keys from list_app_roles, plus "*" (any signed-in user) and "public". 
         if (api) {
           const app = await client.request<any>(
             "POST",
-            `/organizations/${orgId}/apps`,
+            `/organizations/${idSeg(orgId)}/apps`,
             {
               name: api.name || `${project.name} API`,
               projectId: created.id,
@@ -5816,7 +5888,7 @@ Roles are keys from list_app_roles, plus "*" (any signed-in user) and "public". 
           createdAppId = app.id;
           await client.request(
             "POST",
-            `/organizations/${orgId}/apps/${app.id}/publish`,
+            `/organizations/${idSeg(orgId)}/apps/${app.id}/publish`,
             {},
           );
           const methods = api.methods?.length
@@ -5879,7 +5951,7 @@ Roles are keys from list_app_roles, plus "*" (any signed-in user) and "public". 
             if (rowLevelSecurity?.enabled) anyRls = true;
             await client.request(
               "POST",
-              `/organizations/${orgId}/apps/${app.id}/endpoints`,
+              `/organizations/${idSeg(orgId)}/apps/${app.id}/endpoints`,
               {
                 boardId: b.id,
                 slug: b.slug,
@@ -5908,7 +5980,7 @@ Roles are keys from list_app_roles, plus "*" (any signed-in user) and "public". 
           const scopes = writes ? ["read", "write"] : ["read"];
           const key = await client.request<any>(
             "POST",
-            `/organizations/${orgId}/apps/${app.id}/api-keys`,
+            `/organizations/${idSeg(orgId)}/apps/${app.id}/api-keys`,
             {
               name: "frontend",
               scopes,
@@ -5965,13 +6037,13 @@ Roles are keys from list_app_roles, plus "*" (any signed-in user) and "public". 
           if (createdAppId) {
             await client.request(
               "DELETE",
-              `/organizations/${orgId}/apps/${createdAppId}`,
+              `/organizations/${idSeg(orgId)}/apps/${idSeg(createdAppId)}`,
             );
             undone.push("app");
           }
           await client.request(
             "DELETE",
-            `/organizations/${orgId}/projects/${created.id}`,
+            `/organizations/${idSeg(orgId)}/projects/${created.id}`,
           );
           undone.push("project");
         } catch {
@@ -6074,7 +6146,7 @@ Roles are keys from list_app_roles, plus "*" (any signed-in user) and "public". 
 
       const automation = await getApi().request<any>(
         "POST",
-        `/projects/${projectId}/boards/${boardId}/automations`,
+        `/projects/${idSeg(projectId)}/boards/${idSeg(boardId)}/automations`,
         {
           name,
           trigger,
@@ -6086,7 +6158,7 @@ Roles are keys from list_app_roles, plus "*" (any signed-in user) and "public". 
       );
       return ok({
         automation,
-        adminUrl: getApi().appUrl(`/projects/${projectId}/boards/${boardId}`),
+        adminUrl: getApi().appUrl(`/projects/${idSeg(projectId)}/boards/${idSeg(boardId)}`),
       });
     },
   );
@@ -6150,7 +6222,7 @@ Roles are keys from list_app_roles, plus "*" (any signed-in user) and "public". 
       return ok(
         await getApi().request(
           "PATCH",
-          `/projects/${projectId}/boards/${boardId}/automations/${automationId}`,
+          `/projects/${idSeg(projectId)}/boards/${idSeg(boardId)}/automations/${idSeg(automationId)}`,
           body,
         ),
       );
@@ -6172,7 +6244,7 @@ Roles are keys from list_app_roles, plus "*" (any signed-in user) and "public". 
       ok(
         await getApi().request(
           "GET",
-          `/projects/${projectId}/boards/${boardId}/automations`,
+          `/projects/${idSeg(projectId)}/boards/${idSeg(boardId)}/automations`,
         ),
       ),
   );
@@ -6190,7 +6262,7 @@ Roles are keys from list_app_roles, plus "*" (any signed-in user) and "public". 
     },
     async ({ organizationId }) => {
       const orgId = await resolveOrg(organizationId);
-      return ok(await getApi().request("GET", `/organizations/${orgId}/apps`));
+      return ok(await getApi().request("GET", `/organizations/${idSeg(orgId)}/apps`));
     },
   );
 
@@ -6220,7 +6292,7 @@ Roles are keys from list_app_roles, plus "*" (any signed-in user) and "public". 
       return ok(
         await getApi().request(
           "GET",
-          `/organizations/${orgId}/apps/${appId}/spec/${shape}`,
+          `/organizations/${idSeg(orgId)}/apps/${idSeg(appId)}/spec/${shape}`,
         ),
       );
     },
@@ -6248,7 +6320,7 @@ Roles are keys from list_app_roles, plus "*" (any signed-in user) and "public". 
       return ok(
         await getApi().request(
           "GET",
-          `/organizations/${orgId}/apps/${appId}/spec/prompt/${tool}`,
+          `/organizations/${idSeg(orgId)}/apps/${idSeg(appId)}/spec/prompt/${tool}`,
         ),
       );
     },
@@ -6294,10 +6366,10 @@ Roles are keys from list_app_roles, plus "*" (any signed-in user) and "public". 
         : `project:${d.projectId}`;
   const docPath = (d: DocRef): string =>
     d.kind === "item"
-      ? `/projects/${d.projectId}/boards/${d.boardId}/items/${d.itemId}`
+      ? `/projects/${idSeg(d.projectId)}/boards/${idSeg(d.boardId)}/items/${idSeg(d.itemId)}`
       : d.kind === "board"
-        ? `/projects/${d.projectId}/boards/${d.boardId}`
-        : `/projects/${d.projectId}`;
+        ? `/projects/${idSeg(d.projectId)}/boards/${idSeg(d.boardId)}`
+        : `/projects/${idSeg(d.projectId)}`;
   // ChatGPT contract: the object as structuredContent AND JSON-encoded in content.
   const structured = (doc: Record<string, unknown>) => {
     const clean = sanitizeUsersDeep(doc) as Record<string, unknown>;
@@ -6429,7 +6501,7 @@ Roles are keys from list_app_roles, plus "*" (any signed-in user) and "public". 
           try {
             return await api.request<any>(
               "GET",
-              `/organizations/${c}/projects/${ref.projectId}`,
+              `/organizations/${idSeg(c)}/projects/${idSeg(ref.projectId)}`,
             );
           } catch (e) {
             lastErr = e;
@@ -6463,28 +6535,6 @@ Roles are keys from list_app_roles, plus "*" (any signed-in user) and "public". 
 
   // ── Frontend hosting ({slug}.tasklite.dev) ────────────────────────────────
 
-  // Shared by the three deploy_frontend inputs: the zip must serve index.html
-  // at its root. A zip whose only top-level entry is a folder (how most
-  // exporters and GitHub pack a build) is re-rooted rather than rejected.
-  const normalizeBundle = (zip: AdmZip): AdmZip => {
-    const entries = zip
-      .getEntries()
-      .filter((e) => !e.isDirectory && !e.entryName.startsWith("__MACOSX/"));
-    if (entries.some((e) => e.entryName === "index.html")) return zip;
-    const tops = new Set(entries.map((e) => e.entryName.split("/")[0]));
-    if (tops.size === 1) {
-      const [top] = [...tops];
-      if (entries.some((e) => e.entryName === `${top}/index.html`)) {
-        const out = new AdmZip();
-        for (const e of entries)
-          out.addFile(e.entryName.slice(top.length + 1), e.getData());
-        return out;
-      }
-    }
-    throw new Error(
-      "The bundle has no index.html at its root. Pass the build OUTPUT (dist/, build/, out/), not the project source.",
-    );
-  };
   // The hosting takes 95 MB packed (a copied WordPress site with its pages and scripts), under the 100 MB a request
   // through Cloudflare may carry.
   const MAX_BUNDLE = 95 * 1024 * 1024;
@@ -6498,7 +6548,7 @@ Roles are keys from list_app_roles, plus "*" (any signed-in user) and "public". 
 
   tool(
     "deploy_frontend",
-    "Deploy a static frontend to TaskLite hosting and get a live URL https://{slug}.tasklite.dev (HTTPS, auto-published on first deploy, versions kept for rollback_deployment). Hand over the frontend in ONE of three ways: `files`, the files inline (path + content), the way to go from ChatGPT or any hosted client: write index.html and its assets, then deploy in the same turn; `zipUrl`, a public https URL of a zip (a Lovable/Bolt export, a GitHub release asset); `dir`, a build output folder on this machine (only when the MCP runs locally next to the files); `fromAppId`, a version already hosted in the same organization, copied on the server (start a new app from an existing site, or bring an old version back as a new one; get_deployment_files reads a version first). A real build that already exists on the person's machine fits none of these from a hosted server: tell them to drop the zip on the app's Versions screen (the adminUrl of the app, then Versions), which deploys the same way and keeps the same version history. In the frontend, call the app API via relative /api/{endpoint}, the hosting proxy injects the app identity, so no key ships to the browser.",
+    `Deploy a static frontend to TaskLite hosting and get a live URL https://{slug}.tasklite.dev (HTTPS, auto-published on first deploy, versions kept for rollback_deployment). Hand over the frontend in ONE of ${hosted ? "three" : "four"} ways: \`files\`, the files inline (path + content), the way to go from ChatGPT or any hosted client: write index.html and its assets, then deploy in the same turn; \`zipUrl\`, a public https URL of a zip (a Lovable/Bolt export, a GitHub release asset); ${hosted ? "" : "\`dir\`, a build output folder on this machine (only when the MCP runs locally next to the files); "}\`fromAppId\`, a version already hosted in the same organization, copied on the server (start a new app from an existing site, or bring an old version back as a new one; get_deployment_files reads a version first). A real build that already exists on the person's machine fits none of these from a hosted server: tell them to drop the zip on the app's Versions screen (the adminUrl of the app, then Versions), which deploys the same way and keeps the same version history. In the frontend, call the app API via relative /api/{endpoint}, the hosting proxy injects the app identity, so no key ships to the browser.`,
     {
       appId: z
         .string()
@@ -6534,12 +6584,17 @@ Roles are keys from list_app_roles, plus "*" (any signed-in user) and "public". 
         .describe(
           "Public https URL of a zip of the BUILD OUTPUT (index.html at the root, or inside a single top-level folder). Up to 95MB",
         ),
-      dir: z
-        .string()
-        .optional()
-        .describe(
-          "Local path to the BUILD OUTPUT directory (the one containing index.html), not the project root. Only where the MCP runs on the same machine as the files. A folder too big for one upload (over 95MB zipped, a copied WordPress store) is sent in parts and goes live as one version",
-        ),
+      // Not offered by the hosted server: there `dir` would be the server's own disk.
+      ...(hosted
+        ? {}
+        : {
+            dir: z
+              .string()
+              .optional()
+              .describe(
+                "Local path to the BUILD OUTPUT directory (the one containing index.html), not the project root. Only where the MCP runs on the same machine as the files. A folder too big for one upload (over 95MB zipped, a copied WordPress store) is sent in parts and goes live as one version",
+              ),
+          }),
       fromAppId: z
         .string()
         .optional()
@@ -6582,6 +6637,11 @@ Roles are keys from list_app_roles, plus "*" (any signed-in user) and "public". 
       fromVersion?: number;
       organizationId?: string;
     }) => {
+      if (hosted && dir !== undefined) {
+        throw new Error(
+          "dir is not available on the hosted server, which has no access to your files. Pass the site as `files` (inline) or `zipUrl` (a public https zip), or have the person upload the zip on the app's Versions screen.",
+        );
+      }
       const given = [
         files ? "files" : "",
         zipUrl ? "zipUrl" : "",
@@ -6591,7 +6651,9 @@ Roles are keys from list_app_roles, plus "*" (any signed-in user) and "public". 
       if (given.length !== 1) {
         throw new Error(
           given.length === 0
-            ? "Pass the frontend as `files` (inline), `zipUrl` (public zip), `dir` (local build folder) or `fromAppId` (copy a hosted version)."
+            ? hosted
+              ? "Pass the frontend as `files` (inline), `zipUrl` (public zip) or `fromAppId` (copy a hosted version)."
+              : "Pass the frontend as `files` (inline), `zipUrl` (public zip), `dir` (local build folder) or `fromAppId` (copy a hosted version)."
             : `Pass only one of files / zipUrl / dir / fromAppId (got ${given.join(", ")}).`,
         );
       }
@@ -6607,7 +6669,7 @@ Roles are keys from list_app_roles, plus "*" (any signed-in user) and "public". 
       if (fromAppId) {
         const copied = await getApi().request<Record<string, unknown>>(
           "POST",
-          `/organizations/${orgId}/apps/${appId}/deployments/copy`,
+          `/organizations/${idSeg(orgId)}/apps/${idSeg(appId)}/deployments/copy`,
           { fromAppId, ...(fromVersion ? { fromVersion } : {}) },
         );
         const { published: publishedByThisDeploy, ...rest } = copied;
@@ -6656,28 +6718,9 @@ Roles are keys from list_app_roles, plus "*" (any signed-in user) and "public". 
         }
         buffer = zip.toBuffer();
       } else if (zipUrl) {
-        const u = new URL(zipUrl);
-        if (u.protocol !== "https:") throw new Error("zipUrl must be https.");
-        if (
-          /^(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|\[?::1)/.test(
-            u.hostname,
-          ) ||
-          /^\d+\.\d+\.\d+\.\d+$/.test(u.hostname)
-        ) {
-          throw new Error(
-            "zipUrl must point at a public host, not a private address.",
-          );
-        }
-        const res = await fetch(zipUrl, {
-          redirect: "follow",
-          headers: { accept: "application/zip, application/octet-stream, */*" },
-        });
-        if (!res.ok)
-          throw new Error(`Could not download zipUrl: HTTP ${res.status}.`);
-        const declared = Number(res.headers.get("content-length") || 0);
-        checkBundleSize(declared);
-        const raw = Buffer.from(await res.arrayBuffer());
-        checkBundleSize(raw.length);
+        // https only, public addresses only, redirects checked hop by hop,
+        // body streamed and cut at the limit (see safe-fetch.ts).
+        const raw = await downloadPublicZip(zipUrl, MAX_BUNDLE);
         let zip: AdmZip;
         try {
           zip = new AdmZip(raw);
@@ -6691,7 +6734,7 @@ Roles are keys from list_app_roles, plus "*" (any signed-in user) and "public". 
         const abs = resolvePath(dir as string);
         if (!existsSync(abs) || !statSync(abs).isDirectory()) {
           throw new Error(
-            `Directory not found: ${abs}. Run the build first, then pass the output folder (dist/, build/, out/). If the MCP is not running on the machine with the files (a hosted connector never is), pass them as \`files\`, or a \`zipUrl\`, or have the person upload the zip on the app's Versions screen at ${getApi().appUrl(`/apps/${appId}/deployments`)}.`,
+            `Directory not found: ${abs}. Run the build first, then pass the output folder (dist/, build/, out/). If the MCP is not running on the machine with the files (a hosted connector never is), pass them as \`files\`, or a \`zipUrl\`, or have the person upload the zip on the app's Versions screen at ${getApi().appUrl(`/apps/${idSeg(appId)}/deployments`)}.`,
           );
         }
         if (!existsSync(joinPath(abs, "index.html"))) {
@@ -6716,7 +6759,7 @@ Roles are keys from list_app_roles, plus "*" (any signed-in user) and "public". 
             };
             if (uploadId) fields.uploadId = uploadId;
             last = await getApi().requestUpload<Record<string, unknown>>(
-              `/organizations/${orgId}/apps/${appId}/deployments/parts`,
+              `/organizations/${idSeg(orgId)}/apps/${idSeg(appId)}/deployments/parts`,
               "file",
               `part-${i + 1}.zip`,
               packed.part(i),
@@ -6736,7 +6779,7 @@ Roles are keys from list_app_roles, plus "*" (any signed-in user) and "public". 
       checkBundleSize(buffer.length);
 
       const result = await getApi().requestUpload<Record<string, unknown>>(
-        `/organizations/${orgId}/apps/${appId}/deployments`,
+        `/organizations/${idSeg(orgId)}/apps/${idSeg(appId)}/deployments`,
         "file",
         "frontend.zip",
         buffer,
@@ -6772,7 +6815,7 @@ Roles are keys from list_app_roles, plus "*" (any signed-in user) and "public". 
       return ok(
         await getApi().request(
           "GET",
-          `/organizations/${orgId}/apps/${appId}/deployments`,
+          `/organizations/${idSeg(orgId)}/apps/${idSeg(appId)}/deployments`,
         ),
       );
     },
@@ -6834,7 +6877,7 @@ Roles are keys from list_app_roles, plus "*" (any signed-in user) and "public". 
       return ok(
         await getApi().request(
           "GET",
-          `/organizations/${orgId}/apps/${appId}/deployments/files${suffix}`,
+          `/organizations/${idSeg(orgId)}/apps/${idSeg(appId)}/deployments/files${suffix}`,
         ),
       );
     },
@@ -6864,7 +6907,7 @@ Roles are keys from list_app_roles, plus "*" (any signed-in user) and "public". 
       return ok(
         await getApi().request(
           "POST",
-          `/organizations/${orgId}/apps/${appId}/deployments/${version}/activate`,
+          `/organizations/${idSeg(orgId)}/apps/${idSeg(appId)}/deployments/${version}/activate`,
         ),
       );
     },
