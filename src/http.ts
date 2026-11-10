@@ -147,25 +147,35 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
     body = await readBody(req);
   } catch (err) {
     if (err instanceof BodyTooLargeError) {
-      // The answer is written now, but the connection is NOT closed while the upload is still arriving:
-      // closing a socket that has unread data makes the kernel send a reset, and on Linux the client
-      // then loses the 413 it had not read yet. The rest of the body is discarded as it arrives
-      // (readBody), the connection stays open until the client has finished sending, and only a
-      // client that is still sending after DRAIN_MS, or that sends more than DRAIN_BYTES, is cut off.
-      let drained = 0;
-      const giveUp = setTimeout(() => req.destroy(), DRAIN_MS);
-      giveUp.unref();
-      req.on('data', (chunk: Buffer) => {
-        drained += chunk.length;
-        if (drained > DRAIN_BYTES) req.destroy();
+      // The answer waits until the client has finished sending. A server that answers and closes while
+      // the upload is still arriving leaves unread data on the socket, the kernel then sends a reset,
+      // and the client loses the 413 it had not read yet (seen on Linux in CI, and on every platform
+      // when the request asks for Connection: close). The rest of the body is thrown away as it arrives
+      // (readBody); a client still sending after DRAIN_MS, or past DRAIN_BYTES, is answered and cut off.
+      await new Promise<void>((done) => {
+        if (req.readableEnded || req.destroyed) return done();
+        let drained = 0;
+        const giveUp = setTimeout(done, DRAIN_MS);
+        giveUp.unref();
+        const finish = () => {
+          clearTimeout(giveUp);
+          done();
+        };
+        req.on('data', (chunk: Buffer) => {
+          drained += chunk.length;
+          if (drained > DRAIN_BYTES) finish();
+        });
+        req.on('end', finish);
+        req.on('close', finish);
+        req.on('error', finish);
       });
-      req.on('end', () => clearTimeout(giveUp));
-      req.on('close', () => clearTimeout(giveUp));
-      return sendJson(res, 413, {
-        jsonrpc: '2.0',
-        error: { code: -32600, message: 'Request body too large' },
-        id: null,
-      });
+      if (res.destroyed || res.headersSent) return;
+      return sendJson(
+        res,
+        413,
+        { jsonrpc: '2.0', error: { code: -32600, message: 'Request body too large' }, id: null },
+        { Connection: 'close' },
+      );
     }
     if (err instanceof BadJsonError) {
       return sendJson(res, 400, { jsonrpc: '2.0', error: { code: -32700, message: 'Parse error' }, id: null });
