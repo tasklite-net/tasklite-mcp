@@ -5,6 +5,12 @@ are folded into the next published one, so the numbers on npm may skip.
 
 ## Unreleased
 
+### Changed
+- `create_column`, `update_column` and the server instructions describe sealed columns
+  (`settings.sealed: { normalize: "il_id" | "digits" | "text" }`): an ID number is stored only as
+  a keyed server-side fingerprint, found by filtering with the plain value, and kept unique with
+  `settings.validation.unique`. Needs the backend change (tasklite-net/tasklite, sealed columns).
+
 ## 0.22.1, 2026-11-08
 
 ### Fixed
