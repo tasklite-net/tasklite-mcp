@@ -156,6 +156,18 @@ test_telephony_connection, configure_telephony_mapping (board, columns, optional
 customer by phone and employee by extension), preview_telephony_sync (writes
 nothing) and run_telephony_sync.
 
+Google Calendar is held by TaskLite on the server for the signed-in user (no
+Google key in the app, ever). google_calendar_status says whether it is
+connected; google_calendar_connect returns a link for THAT person to open and
+approve (24 hours; pass appId and a returnPath like "/#admin" to land back on
+the app, on whatever domain it has then; google_calendar_set_return_path stores
+the path on the app). Events go to a calendar TaskLite creates in their Google
+account (google_calendar_ensure_calendar, default name "פגישות"):
+google_calendar_list_events, create_event (key = a row id makes it
+idempotent), update_event, delete_event. google_calendar_busy reads when they
+are busy in their own calendars, after a second consent (includeBusyRead).
+Attendees are emailed only with sendInvitations true.
+
 Confirm before delete_item. Creation tools return an adminUrl, so end by telling
 the user where their ready-made admin is. Pass organizationId explicitly when the
 user has more than one org.`;

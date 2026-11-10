@@ -5,6 +5,17 @@ are folded into the next published one, so the numbers on npm may skip.
 
 ## Unreleased
 
+### Added
+- Google Calendar end to end, ten tools: `google_calendar_status`, `google_calendar_connect`
+  (a 24-hour link the person opens; with `appId` and `returnPath` the browser comes back to that
+  app's site on its current domain), `google_calendar_set_return_path`,
+  `google_calendar_ensure_calendar`, `google_calendar_list_events`, `google_calendar_create_event`,
+  `google_calendar_update_event`, `google_calendar_delete_event`, `google_calendar_busy`,
+  `google_calendar_disconnect`. The connection is the signed-in user's, held by TaskLite; writes
+  go to calendars TaskLite creates in that Google account. Needs the backend change
+  (tasklite-net/tasklite, branch feat/gcal-mcp-e2e): status, single-event routes, `connectUrl`
+  and `appId`/`returnPath` on initiate.
+
 ## 0.22.1, 2026-11-08
 
 ### Fixed

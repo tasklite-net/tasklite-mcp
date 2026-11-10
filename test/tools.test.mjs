@@ -1431,3 +1431,76 @@ test('test, status and disconnect hit the per-app telephony routes', async () =>
     ],
   );
 });
+
+// ── Google Calendar ──────────────────────────────────────────────────────────
+
+test('google_calendar_connect: link with the app and a path, org named for a bound key', async () => {
+  const { calls, call } = await harness(() => ({ authUrl: 'https://accounts.google.com/x', connectUrl: 'https://api.test/integrations/oauth/google_calendar/start?t=abc', expiresAt: '2026-11-11T10:00:00.000Z' }));
+  const r = await call('google_calendar_connect', { appId: 'naftali', returnPath: '/#admin' });
+  assert.equal(r.isError, false);
+  assert.equal(r.json.connectUrl, 'https://api.test/integrations/oauth/google_calendar/start?t=abc');
+  assert.equal(r.json.authUrl, undefined, 'the short-lived Google URL is not handed out');
+  assert.equal(calls[0].method, 'POST');
+  assert.equal(calls[0].path, `/integrations/oauth/google_calendar/initiate?orgId=${ORG}`);
+  assert.deepEqual(calls[0].body, { orgId: ORG, includeOptionalScopes: false, appId: 'naftali', returnPath: '/#admin' });
+});
+
+test('google_calendar_connect: a path without an app is refused before any call', async () => {
+  const { calls, call } = await harness();
+  const r = await call('google_calendar_connect', { returnPath: '/#admin' });
+  assert.equal(r.isError, true);
+  assert.equal(calls.length, 0);
+});
+
+test('google_calendar_set_return_path: merges into settings, refuses an address', async () => {
+  const { calls, call } = await harness((m) => (m === 'GET' ? { id: 'app-1', settings: { ai: { enabled: true } } } : undefined));
+  const bad = await call('google_calendar_set_return_path', { appId: 'app-1', returnPath: 'https://evil.com/' });
+  assert.equal(bad.isError, true);
+  assert.equal(calls.length, 0);
+  await call('google_calendar_set_return_path', { appId: 'app-1', returnPath: '/#admin' });
+  assert.deepEqual(calls[1].body, { settings: { ai: { enabled: true }, googleCalendar: { returnPath: '/#admin' } } });
+});
+
+test('google_calendar_create_event: finds the calendar by name, then posts the event', async () => {
+  const { calls, call } = await harness((m, p) => (p.includes('/calendar?') ? { calendarId: 'cal-1', created: false } : { id: 'ev-1' }));
+  await call('google_calendar_create_event', { summary: 'פגישה', date: '2026-11-12', from: '10:00', to: '10:45', key: 'row-1' });
+  assert.equal(calls[0].path, `/integrations/google-calendar/calendar?organizationId=${ORG}`);
+  assert.equal(calls[0].body.summary, 'פגישות');
+  assert.equal(calls[1].path, `/integrations/google-calendar/event?organizationId=${ORG}`);
+  assert.deepEqual(calls[1].body, { summary: 'פגישה', date: '2026-11-12', from: '10:00', to: '10:45', key: 'row-1', calendarId: 'cal-1', timeZone: 'Asia/Jerusalem', organizationId: ORG });
+});
+
+test('google_calendar event tools: list, update and delete address the calendar given', async () => {
+  const { calls, call } = await harness(() => []);
+  await call('google_calendar_list_events', { calendarId: 'c@g', from: '2026-11-01', to: '2026-11-30' });
+  await call('google_calendar_update_event', { calendarId: 'c@g', eventId: 'e 1', from: '12:00', to: '13:00' });
+  await call('google_calendar_delete_event', { calendarId: 'c@g', eventId: 'e1', notifyAttendees: true });
+  assert.deepEqual(
+    calls.map((c) => `${c.method} ${c.path}`),
+    [
+      `GET /integrations/google-calendar/events?organizationId=${ORG}&calendarId=c%40g&from=2026-11-01&to=2026-11-30&timeZone=Asia%2FJerusalem`,
+      `PATCH /integrations/google-calendar/event/e%201?organizationId=${ORG}`,
+      `DELETE /integrations/google-calendar/event/e1?organizationId=${ORG}&calendarId=c%40g&notifyAttendees=true`,
+    ],
+  );
+  assert.deepEqual(calls[1].body, { from: '12:00', to: '13:00', calendarId: 'c@g', timeZone: 'Asia/Jerusalem', organizationId: ORG });
+});
+
+test('google_calendar_busy: a missing read consent says which link to make', async () => {
+  const { call } = await harness(() => {
+    throw new Error('HTTP 403: GOOGLE_CALENDAR_READ_SCOPE_REQUIRED');
+  });
+  const r = await call('google_calendar_busy', { from: '2026-11-01', to: '2026-11-07' });
+  assert.equal(r.isError, true);
+  assert.match(r.text, /includeBusyRead true/);
+});
+
+test('google_calendar_status and disconnect name the organization', async () => {
+  const { calls, call } = await harness();
+  await call('google_calendar_status', {});
+  await call('google_calendar_disconnect', {});
+  assert.deepEqual(
+    calls.map((c) => `${c.method} ${c.path}`),
+    [`GET /integrations/google-calendar/status?organizationId=${ORG}`, `DELETE /integrations/google_calendar?orgId=${ORG}`],
+  );
+});
