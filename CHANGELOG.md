@@ -8,6 +8,41 @@ are folded into the next published one, so the numbers on npm may skip.
 - `get_permission_history`: what changed in roles, grants, the identity board and board policies of an app, with who and when and the value before and after (needs the backend with tasklite-net/tasklite#429).
 - `set_board_policy`: `via` may list two relation columns, a scope two hops away (tenant -> apartment -> framework -> staff; needs tasklite-net/tasklite#431).
 
+## 0.22.2
+
+### Security
+- Hosted server: a malformed or oversized JSON body no longer takes the process down. The body is
+  capped at 16 MB (413 above it), bad JSON gets a 400 JSON-RPC parse error (-32700), every request
+  runs under a catch-all that answers 500 without internals, and `unhandledRejection` and
+  `uncaughtException` are logged instead of fatal. `requestTimeout` and `headersTimeout` are set.
+- Hosted server: listens on `127.0.0.1` by default instead of every interface. `HOST` overrides it.
+- Hosted server: `deploy_frontend` no longer offers `dir`, which read the server's own filesystem.
+  A call with `dir` is refused and names no path. The local stdio install keeps `dir`.
+- `deploy_frontend` `zipUrl`: https only; the host is resolved and refused if any address is
+  private, loopback, link-local, CGNAT, multicast or unspecified (IPv4, IPv6 and IPv4-mapped);
+  redirects are followed by hand (at most 3) and re-checked at every hop; the connection is pinned to
+  the checked address; the body is streamed and cut off at the bundle limit. Zip entries with
+  absolute paths or `..` segments are refused and a zip that unpacks over 300 MB is refused.
+- Ids supplied by the model (organization, app, project, board, item, document, calendar and the like) are
+  checked against `^[A-Za-z0-9_-]{1,128}$` before they go into a URL path.
+
+### Added
+- Google Calendar end to end, ten tools: `google_calendar_status`, `google_calendar_connect`
+  (a 24-hour link the person opens; with `appId` and `returnPath` the browser comes back to that
+  app's site on its current domain), `google_calendar_set_return_path`,
+  `google_calendar_ensure_calendar`, `google_calendar_list_events`, `google_calendar_create_event`,
+  `google_calendar_update_event`, `google_calendar_delete_event`, `google_calendar_busy`,
+  `google_calendar_disconnect`. The connection is the signed-in user's, held by TaskLite; writes
+  go to calendars TaskLite creates in that Google account. Needs the backend change
+  (tasklite-net/tasklite#426): status, single-event routes, `connectUrl`
+  and `appId`/`returnPath` on initiate.
+
+### Changed
+- `create_column`, `update_column` and the server instructions describe sealed columns
+  (`settings.sealed: { normalize: "il_id" | "digits" | "text" }`): an ID number is stored only as
+  a keyed server-side fingerprint, found by filtering with the plain value, and kept unique with
+  `settings.validation.unique`. Needs the backend change (tasklite-net/tasklite, sealed columns).
+
 ## 0.22.1, 2026-11-08
 
 ### Fixed

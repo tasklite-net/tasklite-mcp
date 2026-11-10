@@ -14,7 +14,7 @@ ask for email, name, and a business name, then call sign_up (creates account +
 org from here; a password is set locally and never shown). (sign_up exists only
 on the local install; hosted connections authenticate via OAuth.)
 
-Finding your way around an existing account: list_projects then list_boards. Changing a model after the fact: update_column (name, type, options), delete_column, reorder_columns, update_board, delete_board, no need to rebuild. create_item saves the title and all cells in one call. Column rules (settings.validation: unique, min/max, pattern) and closed-choice options are enforced on every write, so a 400 names the column and the rule. Automations can pause with a delay action and retry network actions (config.retry). export_project returns the project as JSON. To find something by text across the whole organization: search, then fetch the id it returns.
+Finding your way around an existing account: list_projects then list_boards. Changing a model after the fact: update_column (name, type, options), delete_column, reorder_columns, update_board, delete_board, no need to rebuild. create_item saves the title and all cells in one call. Column rules (settings.validation: unique, min/max, pattern) and closed-choice options are enforced on every write, so a 400 names the column and the rule. An ID number or other sensitive identifier goes in a sealed text column (settings.sealed, see create_column): the server keeps only a keyed fingerprint, so never hash it in the page. Automations can pause with a delay action and retry network actions (config.retry). export_project returns the project as JSON. To find something by text across the whole organization: search, then fetch the id it returns.
 Both page at 50, so read the total before concluding something is missing.
 
 Build order: create_project -> create_board -> create_column per field, then
@@ -155,6 +155,18 @@ for the CUSTOMER to type the API token on (never ask for it or accept it pasted)
 test_telephony_connection, configure_telephony_mapping (board, columns, optional
 customer by phone and employee by extension), preview_telephony_sync (writes
 nothing) and run_telephony_sync.
+
+Google Calendar is held by TaskLite on the server for the signed-in user (no
+Google key in the app, ever). google_calendar_status says whether it is
+connected; google_calendar_connect returns a link for THAT person to open and
+approve (24 hours; pass appId and a returnPath like "/#admin" to land back on
+the app, on whatever domain it has then; google_calendar_set_return_path stores
+the path on the app). Events go to a calendar TaskLite creates in their Google
+account (google_calendar_ensure_calendar, default name "פגישות"):
+google_calendar_list_events, create_event (key = a row id makes it
+idempotent), update_event, delete_event. google_calendar_busy reads when they
+are busy in their own calendars, after a second consent (includeBusyRead).
+Attendees are emailed only with sendInvitations true.
 
 Confirm before delete_item. Creation tools return an adminUrl, so end by telling
 the user where their ready-made admin is. Pass organizationId explicitly when the

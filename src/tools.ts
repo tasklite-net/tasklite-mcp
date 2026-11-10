@@ -9,6 +9,7 @@ import { existsSync, statSync } from "node:fs";
 import { resolve as resolvePath, join as joinPath } from "node:path";
 import AdmZip from "adm-zip";
 import { packParts } from "./bundle-parts.js";
+import { downloadPublicZip } from "./safe-fetch.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import {
@@ -56,6 +57,21 @@ function signatureView(doc: Record<string, any>) {
       declinedAt: s.declinedAt ?? null,
     })),
   };
+}
+
+const ID_SEGMENT = /^[A-Za-z0-9_-]{1,128}$/;
+
+/**
+ * An id the caller supplied, checked before it goes into a URL path. Ids from
+ * the model must never carry a slash, a dot segment or a query string.
+ */
+export function idSeg(value: unknown): string {
+  if (typeof value !== "string" || !ID_SEGMENT.test(value)) {
+    throw new Error(
+      "Invalid id: use the id exactly as a list tool returned it (letters, digits, - and _ only, up to 128 characters).",
+    );
+  }
+  return value;
 }
 
 function ok(data: unknown): { content: Array<{ type: "text"; text: string }> } {
@@ -270,7 +286,7 @@ async function refuseStatusOnDataBoard(
   try {
     board = await api.request<any>(
       "GET",
-      `/projects/${projectId}/boards/${boardId}`,
+      `/projects/${idSeg(projectId)}/boards/${idSeg(boardId)}`,
     );
   } catch {
     return;
@@ -279,7 +295,7 @@ async function refuseStatusOnDataBoard(
   let where = "";
   try {
     const cols = columnsOf(
-      await api.request("GET", `/projects/${projectId}/boards/${boardId}/columns`),
+      await api.request("GET", `/projects/${idSeg(projectId)}/boards/${idSeg(boardId)}/columns`),
     );
     const kind = statusColumnKind(cols);
     const column =
@@ -819,6 +835,77 @@ const ANNOTATIONS: Record<string, Record<string, unknown>> = {
     destructiveHint: true,
     idempotentHint: true,
     openWorldHint: false,
+  },
+  google_calendar_status: {
+    title: "Google Calendar connection status",
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: true,
+    openWorldHint: false,
+  },
+  google_calendar_connect: {
+    title: "Get a Google Calendar connection link",
+    readOnlyHint: false,
+    destructiveHint: false,
+    idempotentHint: false,
+    openWorldHint: false,
+  },
+  google_calendar_set_return_path: {
+    title: "Set where the Google connection returns to",
+    readOnlyHint: false,
+    destructiveHint: false,
+    idempotentHint: true,
+    openWorldHint: false,
+  },
+  google_calendar_disconnect: {
+    title: "Disconnect Google Calendar",
+    readOnlyHint: false,
+    destructiveHint: true,
+    idempotentHint: true,
+    openWorldHint: true,
+  },
+  google_calendar_ensure_calendar: {
+    title: "Find or create the app's calendar",
+    readOnlyHint: false,
+    destructiveHint: false,
+    idempotentHint: true,
+    openWorldHint: true,
+  },
+  google_calendar_list_events: {
+    title: "List calendar events",
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: true,
+    openWorldHint: true,
+  },
+  google_calendar_create_event: {
+    title: "Add a calendar event",
+    readOnlyHint: false,
+    destructiveHint: false,
+    // With key the same call twice keeps one event.
+    idempotentHint: false,
+    openWorldHint: true,
+  },
+  google_calendar_update_event: {
+    title: "Change a calendar event",
+    readOnlyHint: false,
+    destructiveHint: false,
+    idempotentHint: true,
+    openWorldHint: true,
+  },
+  google_calendar_delete_event: {
+    title: "Delete a calendar event",
+    readOnlyHint: false,
+    destructiveHint: true,
+    idempotentHint: true,
+    openWorldHint: true,
+  },
+  google_calendar_busy: {
+    title: "Busy times in Google Calendar",
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: true,
+    openWorldHint: true,
   },
   configure_app_settings: {
     title: "Read or change app settings",
@@ -1367,11 +1454,67 @@ function checkCrossBoardActions(
   return null;
 }
 
+// Shared by the three deploy_frontend inputs: the zip must serve index.html
+// at its root. A zip whose only top-level entry is a folder (how most
+// exporters and GitHub pack a build) is re-rooted rather than rejected.
+// The sum of the declared uncompressed sizes of a zip's entries (a zip bomb guard).
+export const MAX_UNCOMPRESSED = 300 * 1024 * 1024;
+export const normalizeBundle = (zip: AdmZip): AdmZip => {
+  const all = zip.getEntries();
+  let uncompressed = 0;
+  for (const e of all) {
+    const name = e.entryName.replace(/\\/g, "/");
+    if (
+      name.startsWith("/") ||
+      /^[A-Za-z]:/.test(name) ||
+      name.split("/").some((seg) => seg === "..")
+    ) {
+      throw new Error(
+        "The zip has an entry with an absolute path or a .. segment, which is not allowed.",
+      );
+    }
+    uncompressed += e.header.size;
+  }
+  if (uncompressed > MAX_UNCOMPRESSED) {
+    throw new Error(
+      `The zip unpacks to ${Math.round(uncompressed / 1024 / 1024)}MB, over the ${MAX_UNCOMPRESSED / 1024 / 1024}MB limit.`,
+    );
+  }
+  const entries = all.filter(
+    (e) => !e.isDirectory && !e.entryName.startsWith("__MACOSX/"),
+  );
+  if (entries.some((e) => e.entryName === "index.html")) return zip;
+  const tops = new Set(entries.map((e) => e.entryName.split("/")[0]));
+  if (tops.size === 1) {
+    const [top] = [...tops];
+    if (entries.some((e) => e.entryName === `${top}/index.html`)) {
+      const out = new AdmZip();
+      for (const e of entries)
+        out.addFile(e.entryName.slice(top.length + 1), e.getData());
+      return out;
+    }
+  }
+  throw new Error(
+    "The bundle has no index.html at its root. Pass the build OUTPUT (dist/, build/, out/), not the project source.",
+  );
+};
+
+export interface RegisterOptions {
+  /**
+   * True for the hosted HTTP server. Tools that would read the server's own
+   * filesystem (deploy_frontend `dir`) are not offered there. Defaults to
+   * false: the stdio entry runs on the user's own machine.
+   */
+  hosted?: boolean;
+}
+
 export function registerTools(
   server: McpServer,
   getApi: GetApi,
   onboarding?: OnboardingHooks,
+  options: RegisterOptions = {},
 ): void {
+  const hosted = options.hosted === true;
   // Wrap server.tool to inject the per-tool annotations (5-arg overload).
   const tool = (
     name: string,
@@ -1667,7 +1810,7 @@ export function registerTools(
     async ({ organizationId }) => {
       const orgId = await resolveOrg(organizationId);
       return ok(
-        await getApi().request("GET", `/organizations/${orgId}/email/usage`),
+        await getApi().request("GET", `/organizations/${idSeg(orgId)}/email/usage`),
       );
     },
   );
@@ -1709,10 +1852,10 @@ export function registerTools(
       }
       const org =
         Object.keys(settings).length > 0
-          ? await getApi().request<any>("PATCH", `/organizations/${orgId}`, {
+          ? await getApi().request<any>("PATCH", `/organizations/${idSeg(orgId)}`, {
               settings,
             })
-          : await getApi().request<any>("GET", `/organizations/${orgId}`);
+          : await getApi().request<any>("GET", `/organizations/${idSeg(orgId)}`);
       const current = (org && org.settings) || {};
       return ok({
         organizationId: orgId,
@@ -1753,7 +1896,7 @@ export function registerTools(
       return ok(
         await getApi().request(
           "GET",
-          `/organizations/${orgId}/projects${suffix}`,
+          `/organizations/${idSeg(orgId)}/projects${suffix}`,
         ),
       );
     },
@@ -1775,7 +1918,7 @@ export function registerTools(
       if (limit) qs.set("limit", String(limit));
       const suffix = qs.toString() ? `?${qs}` : "";
       return ok(
-        await getApi().request("GET", `/projects/${projectId}/boards${suffix}`),
+        await getApi().request("GET", `/projects/${idSeg(projectId)}/boards${suffix}`),
       );
     },
   );
@@ -1797,7 +1940,7 @@ export function registerTools(
       const orgId = await resolveOrg(organizationId);
       const project = await getApi().request<any>(
         "POST",
-        `/organizations/${orgId}/projects`,
+        `/organizations/${idSeg(orgId)}/projects`,
         {
           name,
           organizationId: orgId,
@@ -1830,7 +1973,7 @@ export function registerTools(
     async ({ projectId, name, description, kind }) => {
       const board = await getApi().request<any>(
         "POST",
-        `/projects/${projectId}/boards`,
+        `/projects/${idSeg(projectId)}/boards`,
         {
           name,
           projectId,
@@ -1840,14 +1983,14 @@ export function registerTools(
       );
       return ok({
         board,
-        adminUrl: getApi().appUrl(`/projects/${projectId}/boards/${board.id}`),
+        adminUrl: getApi().appUrl(`/projects/${idSeg(projectId)}/boards/${board.id}`),
       });
     },
   );
 
   tool(
     "create_column",
-    "Add a typed column to a board. Valid types: text, rich_text, number, status, date, datetime, duration, people, checkbox, dropdown, label, priority, link, email, phone, relation, lookup, rollup, formula, rating, currency, file. Choose by meaning, date for dates, phone for phones, number/currency for amounts, dropdown/status (with settings.options as an array of labels) for closed choices; text is for free text only. An obvious name/type mismatch is rejected with the suggested type; pass force:true to override. Rules go in settings.validation: { unique, min, max, minLength, maxLength, pattern, patternMessage }, enforced on every write (UI, MCP, App API). Closed choices (dropdown/status) reject values outside settings.options unless settings.allowCustom is true.",
+    "Add a typed column to a board. Valid types: text, rich_text, number, status, date, datetime, duration, people, checkbox, dropdown, label, priority, link, email, phone, relation, lookup, rollup, formula, rating, currency, file. Choose by meaning, date for dates, phone for phones, number/currency for amounts, dropdown/status (with settings.options as an array of labels) for closed choices; text is for free text only. An obvious name/type mismatch is rejected with the suggested type; pass force:true to override. Rules go in settings.validation: { unique, min, max, minLength, maxLength, pattern, patternMessage }, enforced on every write (UI, MCP, App API). Closed choices (dropdown/status) reject values outside settings.options unless settings.allowCustom is true. Sensitive identifiers (an Israeli ID number, a passport or account number) go in a sealed text column: settings.sealed: { normalize: \"il_id\" | \"digits\" | \"text\" }, usually with settings.validation.unique. The App API then stores only a keyed server-side fingerprint (hmac:v1:<hex>, under a secret key of the organization that never reaches the browser) and returns that on read; the page sends the plain value and must not hash it itself. A GET with filter[field]=<plain value> (eq, ne, in, empty) finds the row, a duplicate POST is refused with VALUE_NOT_UNIQUE, an invalid ID with INVALID_IL_ID. Every other write path (set_cell, create_item, the UI) refuses a plain value there (SEALED_COLUMN), and a column that already holds plain values cannot be sealed: create a new one.",
     {
       projectId: z
         .string()
@@ -1865,7 +2008,7 @@ export function registerTools(
         .record(z.any())
         .optional()
         .describe(
-          'Type-specific settings. For dropdown/status/priority: options, either as labels ["A","B"] or as full objects [{value,label,color}], labels are expanded server-side, and colors are assigned if you do not supply them.',
+          'Type-specific settings. For dropdown/status/priority: options, either as labels ["A","B"] or as full objects [{value,label,color}], labels are expanded server-side, and colors are assigned if you do not supply them. For a sealed text column (ID numbers): { sealed: { normalize: "il_id" }, validation: { unique: true } }.',
         ),
       isRequired: z
         .boolean()
@@ -1890,7 +2033,7 @@ export function registerTools(
       }
       const column = await getApi().request<any>(
         "POST",
-        `/projects/${projectId}/boards/${boardId}/columns`,
+        `/projects/${idSeg(projectId)}/boards/${idSeg(boardId)}/columns`,
         {
           name,
           type,
@@ -1915,10 +2058,10 @@ export function registerTools(
     },
     async ({ projectId, boardId }) => {
       const [board, columns] = await Promise.all([
-        getApi().request("GET", `/projects/${projectId}/boards/${boardId}`),
+        getApi().request("GET", `/projects/${idSeg(projectId)}/boards/${idSeg(boardId)}`),
         getApi().request(
           "GET",
-          `/projects/${projectId}/boards/${boardId}/columns`,
+          `/projects/${idSeg(projectId)}/boards/${idSeg(boardId)}/columns`,
         ),
       ]);
       return ok({ board, columns });
@@ -1947,7 +2090,7 @@ export function registerTools(
       return ok(
         await getApi().request(
           "PATCH",
-          `/projects/${projectId}/boards/${boardId}`,
+          `/projects/${idSeg(projectId)}/boards/${idSeg(boardId)}`,
           body,
         ),
       );
@@ -1968,7 +2111,7 @@ export function registerTools(
     async ({ projectId, boardId }) => {
       await getApi().request(
         "DELETE",
-        `/projects/${projectId}/boards/${boardId}`,
+        `/projects/${idSeg(projectId)}/boards/${idSeg(boardId)}`,
       );
       return ok({ deleted: true, boardId });
     },
@@ -1998,7 +2141,7 @@ export function registerTools(
       const orgId = await resolveOrg(organizationId);
       await getApi().request(
         "DELETE",
-        `/organizations/${orgId}/projects/${projectId}`,
+        `/organizations/${idSeg(orgId)}/projects/${idSeg(projectId)}`,
       );
       return ok({
         deleted: true,
@@ -2028,7 +2171,7 @@ export function registerTools(
         .record(z.unknown())
         .optional()
         .describe(
-          "Replaces the column settings, e.g. { options: [...] } for dropdown/status",
+          "Replaces the column settings, e.g. { options: [...] } for dropdown/status. A sealed column stays sealed unless the new settings say sealed: false; normalize cannot change once it holds values.",
         ),
       isRequired: z
         .boolean()
@@ -2049,7 +2192,7 @@ export function registerTools(
         // Sanity-check the resulting name/type pair the same way create_column does.
         const cols = await getApi().request<any>(
           "GET",
-          `/projects/${projectId}/boards/${boardId}/columns`,
+          `/projects/${idSeg(projectId)}/boards/${idSeg(boardId)}/columns`,
         );
         const list: any[] = Array.isArray(cols)
           ? cols
@@ -2069,7 +2212,7 @@ export function registerTools(
       return ok(
         await getApi().request(
           "PATCH",
-          `/projects/${projectId}/boards/${boardId}/columns/${columnId}`,
+          `/projects/${idSeg(projectId)}/boards/${idSeg(boardId)}/columns/${idSeg(columnId)}`,
           body,
         ),
       );
@@ -2091,7 +2234,7 @@ export function registerTools(
     async ({ projectId, boardId, columnId }) => {
       await getApi().request(
         "DELETE",
-        `/projects/${projectId}/boards/${boardId}/columns/${columnId}`,
+        `/projects/${idSeg(projectId)}/boards/${idSeg(boardId)}/columns/${idSeg(columnId)}`,
       );
       return ok({ deleted: true, columnId });
     },
@@ -2116,7 +2259,7 @@ export function registerTools(
       return ok(
         await getApi().request(
           "PUT",
-          `/projects/${projectId}/boards/${boardId}/columns/reorder`,
+          `/projects/${idSeg(projectId)}/boards/${idSeg(boardId)}/columns/reorder`,
           { columnIds },
         ),
       );
@@ -2146,7 +2289,7 @@ export function registerTools(
       const orgId = await resolveOrg(organizationId);
       const data = await getApi().request<any>(
         "GET",
-        `/organizations/${orgId}/projects/${projectId}/export.json`,
+        `/organizations/${idSeg(orgId)}/projects/${idSeg(projectId)}/export.json`,
       );
       const cap = maxItemsPerBoard ?? 200;
       let truncated = false;
@@ -2247,7 +2390,7 @@ export function registerTools(
       limit?: number;
       page?: number;
     }) => {
-      const base = `/projects/${projectId}/boards/${boardId}/items`;
+      const base = `/projects/${idSeg(projectId)}/boards/${idSeg(boardId)}/items`;
       const filters = new URLSearchParams();
       // A row of a data board is a record, not a task: the App API already
       // omits the built-in task fields for those boards, and this tool now
@@ -2258,7 +2401,7 @@ export function registerTools(
       try {
         board = await getApi().request<any>(
           "GET",
-          `/projects/${projectId}/boards/${boardId}`,
+          `/projects/${idSeg(projectId)}/boards/${idSeg(boardId)}`,
         );
         plain = board?.metadata?.kind === "data";
       } catch {
@@ -2280,7 +2423,7 @@ export function registerTools(
             boardColumns = columnsOf(
               await getApi().request(
                 "GET",
-                `/projects/${projectId}/boards/${boardId}/columns`,
+                `/projects/${idSeg(projectId)}/boards/${idSeg(boardId)}/columns`,
               ),
             );
           } catch {
@@ -2451,7 +2594,7 @@ export function registerTools(
       return ok(
         await getApi().request(
           "POST",
-          `/projects/${projectId}/boards/${boardId}/items`,
+          `/projects/${idSeg(projectId)}/boards/${idSeg(boardId)}/items`,
           body,
         ),
       );
@@ -2499,7 +2642,7 @@ export function registerTools(
       return ok(
         await getApi().request(
           "PATCH",
-          `/projects/${projectId}/boards/${boardId}/items/${itemId}`,
+          `/projects/${idSeg(projectId)}/boards/${idSeg(boardId)}/items/${idSeg(itemId)}`,
           body,
         ),
       );
@@ -2533,7 +2676,7 @@ export function registerTools(
       ok(
         await getApi().request(
           "PUT",
-          `/projects/${projectId}/boards/${boardId}/items/${itemId}/cells/by-column/${columnId}`,
+          `/projects/${idSeg(projectId)}/boards/${idSeg(boardId)}/items/${idSeg(itemId)}/cells/by-column/${idSeg(columnId)}`,
           { value },
         ),
       ),
@@ -2558,7 +2701,7 @@ export function registerTools(
     async ({ projectId, boardId, itemId, columnIds }) => {
       const rows = await getApi().request<
         Array<{ columnId?: string | null; value?: unknown }>
-      >("GET", `/projects/${projectId}/boards/${boardId}/items/${itemId}/cells`);
+      >("GET", `/projects/${idSeg(projectId)}/boards/${idSeg(boardId)}/items/${idSeg(itemId)}/cells`);
       const want = columnIds?.length
         ? new Set(columnIds.map((c: string) => c.toLowerCase()))
         : null;
@@ -2614,7 +2757,7 @@ export function registerTools(
         return ok(
           await getApi().request(
             "PUT",
-            `/projects/${projectId}/boards/${boardId}/items/${itemId}/cells/conditional`,
+            `/projects/${idSeg(projectId)}/boards/${idSeg(boardId)}/items/${idSeg(itemId)}/cells/conditional`,
             { cells },
           ),
         );
@@ -2662,7 +2805,7 @@ export function registerTools(
       ok(
         await getApi().request(
           "DELETE",
-          `/projects/${projectId}/boards/${boardId}/items/${itemId}`,
+          `/projects/${idSeg(projectId)}/boards/${idSeg(boardId)}/items/${idSeg(itemId)}`,
         ),
       ),
   );
@@ -2699,7 +2842,7 @@ export function registerTools(
       return ok(
         await getApi().request(
           "GET",
-          `/projects/${projectId}/items/${itemId}/comments${suffix}`,
+          `/projects/${idSeg(projectId)}/items/${idSeg(itemId)}/comments${suffix}`,
         ),
       );
     },
@@ -2727,7 +2870,7 @@ export function registerTools(
       ok(
         await getApi().request(
           "POST",
-          `/projects/${projectId}/items/${itemId}/comments`,
+          `/projects/${idSeg(projectId)}/items/${idSeg(itemId)}/comments`,
           {
             content,
             ...(mentionedUserIds ? { mentionedUserIds } : {}),
@@ -2752,7 +2895,7 @@ export function registerTools(
       ok(
         await getApi().request(
           "PATCH",
-          `/projects/${projectId}/items/${itemId}/comments/${commentId}`,
+          `/projects/${idSeg(projectId)}/items/${idSeg(itemId)}/comments/${idSeg(commentId)}`,
           { content },
         ),
       ),
@@ -2774,7 +2917,7 @@ export function registerTools(
       ok(
         await getApi().request(
           "DELETE",
-          `/projects/${projectId}/items/${itemId}/comments/${commentId}`,
+          `/projects/${idSeg(projectId)}/items/${idSeg(itemId)}/comments/${idSeg(commentId)}`,
         ),
       ),
   );
@@ -2859,8 +3002,8 @@ export function registerTools(
       // With an address the server sends the invitation itself; without one it
       // only mints the link and handing it over is the caller's business.
       const path = clientEmail
-        ? `/api/client-uploads/request-material?organizationId=${orgId}`
-        : `/api/client-uploads/tokens?organizationId=${orgId}`;
+        ? `/api/client-uploads/request-material?organizationId=${idSeg(orgId)}`
+        : `/api/client-uploads/tokens?organizationId=${idSeg(orgId)}`;
       const created = await getApi().request<{
         id: string;
         token: string;
@@ -2911,12 +3054,12 @@ export function registerTools(
         }>
       >(
         "GET",
-        `/api/attachments?entityType=item&entityId=${itemId}&organizationId=${orgId}`,
+        `/api/attachments?entityType=item&entityId=${idSeg(itemId)}&organizationId=${idSeg(orgId)}`,
       );
       const links = await getApi()
         .request<unknown>(
           "GET",
-          `/api/client-uploads/tokens/item/${itemId}?organizationId=${orgId}`,
+          `/api/client-uploads/tokens/item/${idSeg(itemId)}?organizationId=${idSeg(orgId)}`,
         )
         .catch(() => null);
       // One signing call per file, capped: a board's worth of URLs that nobody
@@ -2928,7 +3071,7 @@ export function registerTools(
           const signed = await getApi()
             .request<{ url: string }>(
               "GET",
-              `/api/attachments/${f.id}/download-url?organizationId=${orgId}`,
+              `/api/attachments/${f.id}/download-url?organizationId=${idSeg(orgId)}`,
             )
             .catch(() => null);
           return { ...f, downloadUrl: signed?.url ?? null };
@@ -3073,7 +3216,7 @@ export function registerTools(
       const orgId = await resolveOrg(a.organizationId);
       const created = await getApi().request<Record<string, unknown>>(
         "POST",
-        `/api/e-signature/requests?organizationId=${orgId}`,
+        `/api/e-signature/requests?organizationId=${idSeg(orgId)}`,
         {
           title: a.title,
           message: a.message,
@@ -3145,14 +3288,14 @@ export function registerTools(
       const orgId = await resolveOrg(organizationId);
       const doc = await getApi().request<Record<string, any>>(
         "GET",
-        `/api/e-signature/documents/${documentId}?organizationId=${orgId}`,
+        `/api/e-signature/documents/${idSeg(documentId)}?organizationId=${idSeg(orgId)}`,
       );
       const view = signatureView(doc);
       if (doc?.finalS3Key) {
         const signed = await getApi()
           .request<{ url: string }>(
             "GET",
-            `/api/e-signature/documents/${documentId}/final?organizationId=${orgId}`,
+            `/api/e-signature/documents/${idSeg(documentId)}/final?organizationId=${idSeg(orgId)}`,
           )
           .catch(() => null);
         return ok({ ...view, signedFileUrl: signed?.url ?? null });
@@ -3185,7 +3328,7 @@ export function registerTools(
       return ok(
         await getApi().request(
           "POST",
-          `/api/e-signature/requests/${documentId}/link?organizationId=${orgId}`,
+          `/api/e-signature/requests/${idSeg(documentId)}/link?organizationId=${idSeg(orgId)}`,
           { signerId },
         ),
       );
@@ -3215,7 +3358,7 @@ export function registerTools(
       const orgId = await resolveOrg(organizationId);
       const doc = await getApi().request<Record<string, any>>(
         "POST",
-        `/api/e-signature/documents/${documentId}/void?organizationId=${orgId}`,
+        `/api/e-signature/documents/${idSeg(documentId)}/void?organizationId=${idSeg(orgId)}`,
         { reason },
       );
       return ok(signatureView(doc));
@@ -3247,7 +3390,7 @@ export function registerTools(
     { appId: TELEPHONY_APP_ID, organizationId: TELEPHONY_ORG_ID },
     async ({ appId, organizationId }: { appId: string; organizationId?: string }) => {
       const orgId = await resolveOrg(organizationId);
-      return ok(await getApi().request("GET", `/organizations/${orgId}/apps/${appId}/telephony`));
+      return ok(await getApi().request("GET", `/organizations/${idSeg(orgId)}/apps/${idSeg(appId)}/telephony`));
     },
   );
 
@@ -3278,7 +3421,7 @@ export function registerTools(
       return ok(
         await getApi().request(
           "POST",
-          `/organizations/${orgId}/apps/${appId}/telephony/connect-link`,
+          `/organizations/${idSeg(orgId)}/apps/${idSeg(appId)}/telephony/connect-link`,
           { provider, publicConfig },
         ),
       );
@@ -3292,7 +3435,7 @@ export function registerTools(
     async ({ appId, organizationId }: { appId: string; organizationId?: string }) => {
       const orgId = await resolveOrg(organizationId);
       return ok(
-        await getApi().request("POST", `/organizations/${orgId}/apps/${appId}/telephony/test`),
+        await getApi().request("POST", `/organizations/${idSeg(orgId)}/apps/${idSeg(appId)}/telephony/test`),
       );
     },
   );
@@ -3370,7 +3513,7 @@ export function registerTools(
       return ok(
         await getApi().request(
           "PUT",
-          `/organizations/${orgId}/apps/${appId}/telephony/mapping`,
+          `/organizations/${idSeg(orgId)}/apps/${idSeg(appId)}/telephony/mapping`,
           mapping,
         ),
       );
@@ -3399,7 +3542,7 @@ export function registerTools(
     }) => {
       const orgId = await resolveOrg(organizationId);
       return ok(
-        await getApi().request("POST", `/organizations/${orgId}/apps/${appId}/telephony/sync`, {
+        await getApi().request("POST", `/organizations/${idSeg(orgId)}/apps/${idSeg(appId)}/telephony/sync`, {
           from,
           to,
           dryRun: true,
@@ -3430,7 +3573,7 @@ export function registerTools(
     }) => {
       const orgId = await resolveOrg(organizationId);
       return ok(
-        await getApi().request("POST", `/organizations/${orgId}/apps/${appId}/telephony/sync`, {
+        await getApi().request("POST", `/organizations/${idSeg(orgId)}/apps/${idSeg(appId)}/telephony/sync`, {
           from,
           to,
           dryRun: false,
@@ -3445,7 +3588,7 @@ export function registerTools(
     { appId: TELEPHONY_APP_ID, organizationId: TELEPHONY_ORG_ID },
     async ({ appId, organizationId }: { appId: string; organizationId?: string }) => {
       const orgId = await resolveOrg(organizationId);
-      await getApi().request("DELETE", `/organizations/${orgId}/apps/${appId}/telephony/connection`);
+      await getApi().request("DELETE", `/organizations/${idSeg(orgId)}/apps/${idSeg(appId)}/telephony/connection`);
       return ok({ disconnected: true });
     },
   );
@@ -3474,7 +3617,7 @@ export function registerTools(
       const orgId = await resolveOrg(organizationId);
       await getApi().request(
         "DELETE",
-        `/api/client-uploads/tokens/${tokenId}?organizationId=${orgId}`,
+        `/api/client-uploads/tokens/${idSeg(tokenId)}?organizationId=${idSeg(orgId)}`,
       );
       return ok({ revoked: true, tokenId });
     },
@@ -3501,7 +3644,7 @@ export function registerTools(
       const orgId = await resolveOrg(organizationId);
       const app = await getApi().request<any>(
         "POST",
-        `/organizations/${orgId}/apps`,
+        `/organizations/${idSeg(orgId)}/apps`,
         {
           name,
           projectId,
@@ -3535,7 +3678,7 @@ export function registerTools(
       const orgId = await resolveOrg(organizationId);
       const status = await getApi().request<any>(
         "GET",
-        `/organizations/${orgId}/apps/${appId}/push`,
+        `/organizations/${idSeg(orgId)}/apps/${idSeg(appId)}/push`,
       );
       return ok({
         ...status,
@@ -3598,7 +3741,7 @@ export function registerTools(
       const orgId = await resolveOrg(organizationId);
       const res = await getApi().request<any>(
         "POST",
-        `/organizations/${orgId}/apps/${appId}/push/test`,
+        `/organizations/${idSeg(orgId)}/apps/${idSeg(appId)}/push/test`,
         {
           userIds,
           title,
@@ -3632,7 +3775,7 @@ export function registerTools(
       return ok(
         await getApi().request(
           "POST",
-          `/organizations/${orgId}/apps/${appId}/publish`,
+          `/organizations/${idSeg(orgId)}/apps/${idSeg(appId)}/publish`,
           {},
         ),
       );
@@ -3705,7 +3848,7 @@ export function registerTools(
       return ok(
         await getApi().request(
           "POST",
-          `/organizations/${orgId}/apps/${appId}/endpoints`,
+          `/organizations/${idSeg(orgId)}/apps/${idSeg(appId)}/endpoints`,
           body,
         ),
       );
@@ -3731,7 +3874,7 @@ export function registerTools(
       return ok(
         await getApi().request(
           "GET",
-          `/organizations/${orgId}/apps/${appId}/endpoints`,
+          `/organizations/${idSeg(orgId)}/apps/${idSeg(appId)}/endpoints`,
         ),
       );
     },
@@ -3796,7 +3939,7 @@ export function registerTools(
       return ok(
         await getApi().request(
           "PATCH",
-          `/organizations/${orgId}/apps/${appId}/endpoints/${endpointId}`,
+          `/organizations/${idSeg(orgId)}/apps/${idSeg(appId)}/endpoints/${idSeg(endpointId)}`,
           body,
         ),
       );
@@ -3822,9 +3965,397 @@ export function registerTools(
       const orgId = await resolveOrg(organizationId);
       await getApi().request(
         "DELETE",
-        `/organizations/${orgId}/apps/${appId}/endpoints/${endpointId}`,
+        `/organizations/${idSeg(orgId)}/apps/${idSeg(appId)}/endpoints/${idSeg(endpointId)}`,
       );
       return ok({ deleted: true, endpointId });
+    },
+  );
+
+  // ── Google Calendar ────────────────────────────────────────────────────────
+  // The connection is the CALLER's own (the TaskLite user of this credential),
+  // held by TaskLite on the server: no Google key or token ever reaches here or
+  // the app. Write access is to calendars TaskLite creates in that Google
+  // account (Google's calendar.app.created); reading busy time in the person's
+  // other calendars is a second, optional consent (includeBusyRead).
+
+  const GCAL = "/integrations/google-calendar";
+  const GCAL_ORG = z
+    .string()
+    .optional()
+    .describe("Organization id; defaults to the credential organization when omitted");
+  const GCAL_TZ = z
+    .string()
+    .optional()
+    .describe('IANA timezone the dates and times are in, default "Asia/Jerusalem"');
+  const GCAL_CAL = {
+    calendarId: z
+      .string()
+      .optional()
+      .describe("The calendar's id (from google_calendar_ensure_calendar). Omit to use the calendar named calendarName"),
+    calendarName: z
+      .string()
+      .optional()
+      .describe('The calendar TaskLite keeps in the Google account, found or created by this name. Default "פגישות"'),
+  };
+  const DATE = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "YYYY-MM-DD");
+  const TIME = z.string().regex(/^\d{1,2}:\d{2}$/, "HH:MM");
+  const q = (params: Record<string, string | undefined>) =>
+    Object.entries(params)
+      .filter((e): e is [string, string] => e[1] !== undefined && e[1] !== "")
+      .map(([k, v]) => `${k}=${encodeURIComponent(v)}`)
+      .join("&");
+  const gcalHint = (e: unknown): never => {
+    const msg = e instanceof Error ? e.message : String(e);
+    if (/is not connected|Integration not found/i.test(msg)) {
+      throw new Error(
+        `${msg}. Google Calendar is not connected for this user: call google_calendar_connect and send the link to the person to open.`,
+      );
+    }
+    if (/GOOGLE_REAUTH_REQUIRED|must be reconnected/i.test(msg)) {
+      throw new Error(
+        `${msg}. Google no longer accepts this connection (revoked or expired): call google_calendar_connect for a new link.`,
+      );
+    }
+    if (/GOOGLE_CALENDAR_READ_SCOPE_REQUIRED/.test(msg)) {
+      throw new Error(
+        `${msg}. Reading busy time needs a second consent: call google_calendar_connect with includeBusyRead true and send that link.`,
+      );
+    }
+    throw e;
+  };
+  const calendarIdFor = async (
+    orgId: string,
+    o: { calendarId?: string; calendarName?: string; timeZone?: string },
+  ): Promise<string> => {
+    if (o.calendarId) return o.calendarId;
+    const r = await getApi()
+      .request<any>("POST", `${GCAL}/calendar?${q({ organizationId: orgId })}`, {
+        summary: o.calendarName || "פגישות",
+        timeZone: o.timeZone || "Asia/Jerusalem",
+        organizationId: orgId,
+      })
+      .catch(gcalHint);
+    if (!r?.calendarId) throw new Error("The calendar could not be found or created");
+    return String(r.calendarId);
+  };
+
+  tool(
+    "google_calendar_status",
+    "Whether the signed-in user has connected Google Calendar to TaskLite, which Google account, and what the connection may do: canWriteOwnCalendars (add, change and delete events in the calendars TaskLite creates in that account), canReadBusy (read when the person is already busy in their other calendars, a second consent), needsReconnect (Google stopped accepting it: a new google_calendar_connect link is needed). The connection belongs to the user, not to an app: every app of the user writes through it. Never returns a token.",
+    { organizationId: GCAL_ORG },
+    async ({ organizationId }: { organizationId?: string }) => {
+      const orgId = await resolveOrg(organizationId);
+      return ok(
+        await getApi().request("GET", `${GCAL}/status?${q({ organizationId: orgId })}`),
+      );
+    },
+  );
+
+  tool(
+    "google_calendar_connect",
+    "Get the link that connects the signed-in user's Google Calendar to TaskLite. Send connectUrl to the person as is: they open it, approve on Google's own page, and come back. It lasts 24 hours and can be opened again in that time; calling again makes a new one. Only that person can approve: the link connects whichever Google account approves it to THIS TaskLite user, so send it only to them. With appId the browser comes back to that app's site, on the domain the app has at that moment (its custom domain, else <slug>.tasklite.dev), at returnPath (a path such as \"/#admin\"), or at the path saved with google_calendar_set_return_path, else \"/\". Without appId it ends on a TaskLite page that says the calendar is connected. includeBusyRead true also asks to read busy time (the person's existing meetings) so bookings can avoid them; Google calls that a sensitive permission and shows a stronger consent screen, so ask for it only when the person wants it. Asking again later keeps the write access already given. Afterwards google_calendar_status shows connected.",
+    {
+      appId: z.string().optional().describe("App id or slug whose site the browser returns to"),
+      returnPath: z
+        .string()
+        .optional()
+        .describe('A path on the app\'s site starting with "/", e.g. "/#admin" or "/admin/calendar". Not an address: the domain is the app\'s'),
+      includeBusyRead: z
+        .boolean()
+        .optional()
+        .describe("Also ask to read busy time in the person's other calendars. Default false"),
+      organizationId: GCAL_ORG,
+    },
+    async ({
+      appId,
+      returnPath,
+      includeBusyRead,
+      organizationId,
+    }: {
+      appId?: string;
+      returnPath?: string;
+      includeBusyRead?: boolean;
+      organizationId?: string;
+    }) => {
+      if (returnPath !== undefined && !appId) {
+        throw new Error("returnPath needs appId: it is a path on that app's site.");
+      }
+      const orgId = await resolveOrg(organizationId);
+      const r = await getApi().request<any>(
+        "POST",
+        `/integrations/oauth/google_calendar/initiate?${q({ orgId })}`,
+        {
+          orgId,
+          includeOptionalScopes: includeBusyRead === true,
+          ...(appId ? { appId } : {}),
+          ...(returnPath !== undefined ? { returnPath } : {}),
+        },
+      );
+      return ok({
+        connectUrl: r?.connectUrl,
+        expiresAt: r?.expiresAt,
+        includesBusyRead: includeBusyRead === true,
+        next: "Send connectUrl to the person. After they approve, google_calendar_status shows connected.",
+      });
+    },
+  );
+
+  tool(
+    "google_calendar_set_return_path",
+    'Save on an app the page the browser returns to after a Google Calendar connection started for that app (google_calendar_connect with appId, or the site\'s own "connect" button through POST /integrations/oauth/google_calendar/initiate with appId). Only a path, e.g. "/#admin": the domain is always the app\'s own at the moment of connecting, so a later domain change needs nothing here. Stored as settings.googleCalendar.returnPath. null removes it (back to "/").',
+    {
+      appId: z.string().describe("App id or slug"),
+      returnPath: z
+        .string()
+        .nullable()
+        .describe('A path starting with "/", e.g. "/#admin". null removes it'),
+      organizationId: GCAL_ORG,
+    },
+    async ({
+      appId,
+      returnPath,
+      organizationId,
+    }: {
+      appId: string;
+      returnPath: string | null;
+      organizationId?: string;
+    }) => {
+      if (returnPath !== null) {
+        const path = returnPath.trim();
+        if (!path.startsWith("/") || path.startsWith("//") || path.includes("\\") || /\s/.test(path)) {
+          throw new Error('returnPath must be a path on the app starting with "/" (e.g. "/#admin"), with no domain and no spaces.');
+        }
+        returnPath = path;
+      }
+      const orgId = await resolveOrg(organizationId);
+      const app = await getApi().request<any>("GET", `/organizations/${orgId}/apps/${appId}`);
+      const current: Record<string, unknown> =
+        app && typeof app.settings === "object" && app.settings !== null ? app.settings : {};
+      const merged = mergeSettings(current, { googleCalendar: { returnPath } });
+      const updated = await getApi().request<any>(
+        "PATCH",
+        `/organizations/${orgId}/apps/${appId}`,
+        { settings: merged },
+      );
+      return ok({
+        appId: updated?.id ?? app?.id ?? appId,
+        returnPath: (updated?.settings ?? merged)?.googleCalendar?.returnPath ?? null,
+      });
+    },
+  );
+
+  tool(
+    "google_calendar_disconnect",
+    "Disconnect the signed-in user's Google Calendar from TaskLite: the access is revoked at Google and forgotten here. Events already in the calendar stay where they are. Every app of this user stops writing to the calendar until it is connected again. Only when the person asked for it.",
+    { organizationId: GCAL_ORG },
+    async ({ organizationId }: { organizationId?: string }) => {
+      const orgId = await resolveOrg(organizationId);
+      await getApi()
+        .request("DELETE", `/integrations/google_calendar?${q({ orgId })}`)
+        .catch(gcalHint);
+      return ok({ disconnected: true });
+    },
+  );
+
+  tool(
+    "google_calendar_ensure_calendar",
+    'Find, or create the first time, the calendar TaskLite keeps in the user\'s Google account under a name (default "פגישות"). It appears in their Google Calendar beside their own calendars, with its own colour, on every device. Returns { calendarId, created }. The event tools find it by name themselves; call this to know the id or to create it ahead.',
+    {
+      name: z.string().optional().describe('The calendar\'s name, default "פגישות"'),
+      description: z.string().optional().describe("Shown in Google Calendar under the name"),
+      timeZone: GCAL_TZ,
+      organizationId: GCAL_ORG,
+    },
+    async ({
+      name,
+      description,
+      timeZone,
+      organizationId,
+    }: {
+      name?: string;
+      description?: string;
+      timeZone?: string;
+      organizationId?: string;
+    }) => {
+      const orgId = await resolveOrg(organizationId);
+      return ok(
+        await getApi()
+          .request("POST", `${GCAL}/calendar?${q({ organizationId: orgId })}`, {
+            summary: name || "פגישות",
+            ...(description ? { description } : {}),
+            timeZone: timeZone || "Asia/Jerusalem",
+            organizationId: orgId,
+          })
+          .catch(gcalHint),
+      );
+    },
+  );
+
+  tool(
+    "google_calendar_list_events",
+    "The events of a TaskLite calendar in the user's Google account that touch the days from..to (inclusive), in order, with times as the wall clock in timeZone. Each: id (for update and delete), summary, description, location, date, endDate, from, to (null for an all-day event), allDay, attendees, htmlLink.",
+    {
+      ...GCAL_CAL,
+      from: DATE.describe("First day, YYYY-MM-DD"),
+      to: DATE.describe("Last day, YYYY-MM-DD"),
+      timeZone: GCAL_TZ,
+      organizationId: GCAL_ORG,
+    },
+    async (a: {
+      calendarId?: string;
+      calendarName?: string;
+      from: string;
+      to: string;
+      timeZone?: string;
+      organizationId?: string;
+    }) => {
+      const orgId = await resolveOrg(a.organizationId);
+      const calendarId = await calendarIdFor(orgId, a);
+      const events = await getApi()
+        .request(
+          "GET",
+          `${GCAL}/events?${q({ organizationId: orgId, calendarId, from: a.from, to: a.to, timeZone: a.timeZone || "Asia/Jerusalem" })}`,
+        )
+        .catch(gcalHint);
+      return ok({ calendarId, events });
+    },
+  );
+
+  const EVENT_FIELDS = {
+    description: z.string().optional().describe("Details shown in the event"),
+    location: z.string().optional().describe("Where, as text"),
+    from: TIME.optional().describe("Start time HH:MM. Leave from and to out for an all-day event"),
+    to: TIME.optional().describe("End time HH:MM"),
+    endDate: DATE.optional().describe("Last day YYYY-MM-DD, for an event over several days"),
+    attendees: z
+      .array(z.string().email())
+      .optional()
+      .describe("Guests' email addresses. Invited (Google emails them, and again on every change) only with sendInvitations true"),
+    sendInvitations: z
+      .boolean()
+      .optional()
+      .describe("Email the attendees. Default false: only with the person's clear wish"),
+  };
+
+  tool(
+    "google_calendar_create_event",
+    "Add an event to a TaskLite calendar in the user's Google account. Times are wall clock in timeZone; from and to both left out make an all-day event. key (e.g. the row id of the booking) makes it safe to call again: the same key updates the one event instead of adding a second, and brings it back if it was deleted. Returns the event with its id.",
+    {
+      ...GCAL_CAL,
+      summary: z.string().min(1).describe("The title"),
+      date: DATE.describe("The day, YYYY-MM-DD"),
+      ...EVENT_FIELDS,
+      key: z.string().optional().describe("A stable id of your own for this event, e.g. the row id"),
+      timeZone: GCAL_TZ,
+      organizationId: GCAL_ORG,
+    },
+    async (a: any) => {
+      const orgId = await resolveOrg(a.organizationId);
+      const calendarId = await calendarIdFor(orgId, a);
+      const { calendarName, organizationId, timeZone, ...event } = a;
+      void calendarName;
+      void organizationId;
+      return ok(
+        await getApi()
+          .request("POST", `${GCAL}/event?${q({ organizationId: orgId })}`, {
+            ...event,
+            calendarId,
+            timeZone: timeZone || "Asia/Jerusalem",
+            organizationId: orgId,
+          })
+          .catch(gcalHint),
+      );
+    },
+  );
+
+  tool(
+    "google_calendar_update_event",
+    "Change some fields of an event (id from google_calendar_list_events or create). What is not given stays: moving only from/to keeps the day, moving only date keeps the hours (and the length of a multi-day event). attendees replaces the list; they are emailed only with sendInvitations true.",
+    {
+      ...GCAL_CAL,
+      eventId: z.string().describe("The event's id"),
+      summary: z.string().min(1).optional().describe("New title"),
+      date: DATE.optional().describe("New day, YYYY-MM-DD"),
+      ...EVENT_FIELDS,
+      timeZone: GCAL_TZ,
+      organizationId: GCAL_ORG,
+    },
+    async (a: any) => {
+      const orgId = await resolveOrg(a.organizationId);
+      const calendarId = await calendarIdFor(orgId, a);
+      const { calendarName, organizationId, timeZone, eventId, ...changes } = a;
+      void calendarName;
+      void organizationId;
+      return ok(
+        await getApi()
+          .request(
+            "PATCH",
+            `${GCAL}/event/${encodeURIComponent(eventId)}?${q({ organizationId: orgId })}`,
+            { ...changes, calendarId, timeZone: timeZone || "Asia/Jerusalem", organizationId: orgId },
+          )
+          .catch(gcalHint),
+      );
+    },
+  );
+
+  tool(
+    "google_calendar_delete_event",
+    "Delete one event from a TaskLite calendar in the user's Google account. Deleting one already gone is not an error (alreadyGone true). notifyAttendees true emails its guests that it was cancelled.",
+    {
+      ...GCAL_CAL,
+      eventId: z.string().describe("The event's id"),
+      notifyAttendees: z.boolean().optional().describe("Email the guests a cancellation. Default false"),
+      organizationId: GCAL_ORG,
+    },
+    async (a: {
+      calendarId?: string;
+      calendarName?: string;
+      eventId: string;
+      notifyAttendees?: boolean;
+      organizationId?: string;
+    }) => {
+      const orgId = await resolveOrg(a.organizationId);
+      const calendarId = await calendarIdFor(orgId, a);
+      return ok(
+        await getApi()
+          .request(
+            "DELETE",
+            `${GCAL}/event/${encodeURIComponent(a.eventId)}?${q({ organizationId: orgId, calendarId, notifyAttendees: a.notifyAttendees ? "true" : undefined })}`,
+          )
+          .catch(gcalHint),
+      );
+    },
+  );
+
+  tool(
+    "google_calendar_busy",
+    "When the user is already busy, across their own Google calendars (not the details, only the times), between two days: [{ date, from, to }] as wall clock in timeZone, so a booking page can offer only free slots. Declined invitations, events marked free and holiday calendars do not count. Needs the busy-read consent: when it is missing the answer says so, and google_calendar_connect with includeBusyRead true makes the link for it.",
+    {
+      from: DATE.describe("First day, YYYY-MM-DD"),
+      to: DATE.describe("Last day, YYYY-MM-DD"),
+      timeZone: GCAL_TZ,
+      excludeCalendarId: z
+        .string()
+        .optional()
+        .describe("A calendar to leave out, usually the TaskLite one whose bookings the app already knows"),
+      organizationId: GCAL_ORG,
+    },
+    async (a: {
+      from: string;
+      to: string;
+      timeZone?: string;
+      excludeCalendarId?: string;
+      organizationId?: string;
+    }) => {
+      const orgId = await resolveOrg(a.organizationId);
+      return ok(
+        await getApi()
+          .request(
+            "GET",
+            `${GCAL}/busy?${q({ organizationId: orgId, from: a.from, to: a.to, timeZone: a.timeZone || "Asia/Jerusalem", excludeCalendarId: a.excludeCalendarId })}`,
+          )
+          .catch(gcalHint),
+      );
     },
   );
 
@@ -3862,7 +4393,7 @@ export function registerTools(
       const orgId = await resolveOrg(organizationId);
       const app = await getApi().request<any>(
         "GET",
-        `/organizations/${orgId}/apps/${appId}`,
+        `/organizations/${idSeg(orgId)}/apps/${idSeg(appId)}`,
       );
       const current: Record<string, unknown> =
         app && typeof app.settings === "object" && app.settings !== null
@@ -3874,7 +4405,7 @@ export function registerTools(
       const merged = mergeSettings(current, set);
       const updated = await getApi().request<any>(
         "PATCH",
-        `/organizations/${orgId}/apps/${appId}`,
+        `/organizations/${idSeg(orgId)}/apps/${idSeg(appId)}`,
         { settings: merged },
       );
       return ok({
@@ -3907,7 +4438,7 @@ export function registerTools(
     },
     async ({ appId, organizationId }) => {
       const orgId = await resolveOrg(organizationId);
-      const base = `/organizations/${orgId}/apps/${appId}/users`;
+      const base = `/organizations/${idSeg(orgId)}/apps/${idSeg(appId)}/users`;
       const [users, pending] = await Promise.all([
         getApi().request("GET", base),
         getApi().request("GET", `${base}/pending`),
@@ -3958,7 +4489,7 @@ export function registerTools(
       return ok(
         await getApi().request(
           "POST",
-          `/organizations/${orgId}/apps/${appId}/users`,
+          `/organizations/${idSeg(orgId)}/apps/${idSeg(appId)}/users`,
           body,
         ),
       );
@@ -4005,7 +4536,7 @@ export function registerTools(
       return ok(
         await getApi().request(
           "PATCH",
-          `/organizations/${orgId}/apps/${appId}/users/${userId}`,
+          `/organizations/${idSeg(orgId)}/apps/${idSeg(appId)}/users/${idSeg(userId)}`,
           body,
         ),
       );
@@ -4041,7 +4572,7 @@ export function registerTools(
         return ok({ error: "Pass exactly one of userId and pendingId." });
       }
       const orgId = await resolveOrg(organizationId);
-      const base = `/organizations/${orgId}/apps/${appId}/users`;
+      const base = `/organizations/${idSeg(orgId)}/apps/${idSeg(appId)}/users`;
       if (pendingId !== undefined) {
         return ok(await getApi().request("DELETE", `${base}/pending/${pendingId}`));
       }
@@ -4131,7 +4662,7 @@ export function registerTools(
       if (label !== undefined) body.label = label;
       const invite = await getApi().request<any>(
         "POST",
-        `/organizations/${orgId}/apps/${appId}/invites`,
+        `/organizations/${idSeg(orgId)}/apps/${idSeg(appId)}/invites`,
         body,
       );
       return ok({
@@ -4161,7 +4692,7 @@ export function registerTools(
       return ok(
         await getApi().request(
           "GET",
-          `/organizations/${orgId}/apps/${appId}/invites`,
+          `/organizations/${idSeg(orgId)}/apps/${idSeg(appId)}/invites`,
         ),
       );
     },
@@ -4189,7 +4720,7 @@ export function registerTools(
       return ok(
         await getApi().request(
           "DELETE",
-          `/organizations/${orgId}/apps/${appId}/invites/${inviteId}`,
+          `/organizations/${idSeg(orgId)}/apps/${idSeg(appId)}/invites/${idSeg(inviteId)}`,
         ),
       );
     },
@@ -4232,7 +4763,7 @@ export function registerTools(
       return ok(
         await getApi().request(
           "POST",
-          `/organizations/${orgId}/apps/${appId}/users/${userId}/links`,
+          `/organizations/${idSeg(orgId)}/apps/${idSeg(appId)}/users/${idSeg(userId)}/links`,
           { itemId },
         ),
       );
@@ -4261,7 +4792,7 @@ export function registerTools(
       return ok(
         await getApi().request(
           "GET",
-          `/organizations/${orgId}/apps/${appId}/users/${userId}/links`,
+          `/organizations/${idSeg(orgId)}/apps/${idSeg(appId)}/users/${idSeg(userId)}/links`,
         ),
       );
     },
@@ -4292,7 +4823,7 @@ export function registerTools(
       return ok(
         await getApi().request(
           "DELETE",
-          `/organizations/${orgId}/apps/${appId}/users/${userId}/links/${itemId}`,
+          `/organizations/${idSeg(orgId)}/apps/${idSeg(appId)}/users/${idSeg(userId)}/links/${idSeg(itemId)}`,
         ),
       );
     },
@@ -4303,7 +4834,7 @@ export function registerTools(
   // what a board policy says. All of the admin routes need organization owner
   // or admin.
   const permBase = (orgId: string, appId: string) =>
-    `/organizations/${orgId}/apps/${encodeURIComponent(appId)}/permissions`;
+    `/organizations/${idSeg(orgId)}/apps/${encodeURIComponent(appId)}/permissions`;
   // A refused policy comes back as 400 POLICY_INVALID with an errors list
   // naming each problem; the plain error message keeps only the headline, so
   // the whole body goes back for the builder to fix from.
@@ -4769,7 +5300,7 @@ Roles are keys from list_app_roles, plus "*" (any signed-in user) and "public". 
       return ok(
         await getApi().request(
           "GET",
-          `/organizations/${orgId}/items/${encodeURIComponent(itemId)}/history${qs ? `?${qs}` : ""}`,
+          `/organizations/${idSeg(orgId)}/items/${encodeURIComponent(itemId)}/history${qs ? `?${qs}` : ""}`,
         ),
       );
     },
@@ -4801,7 +5332,7 @@ Roles are keys from list_app_roles, plus "*" (any signed-in user) and "public". 
       return ok(
         await getApi().request(
           "POST",
-          `/organizations/${orgId}/apps/${appId}/api-keys`,
+          `/organizations/${idSeg(orgId)}/apps/${idSeg(appId)}/api-keys`,
           {
             name: name || "frontend",
             ...(scopes?.length ? { scopes } : {}),
@@ -5153,13 +5684,13 @@ Roles are keys from list_app_roles, plus "*" (any signed-in user) and "public". 
         try {
           const sub = await client.request<any>(
             "GET",
-            `/organizations/${orgId}/subscription`,
+            `/organizations/${idSeg(orgId)}/subscription`,
           );
           const allowed = sub?.plan?.features?.limits?.publishedApps;
           if (typeof allowed === "number") {
             const apps = await client.request<any>(
               "GET",
-              `/organizations/${orgId}/apps`,
+              `/organizations/${idSeg(orgId)}/apps`,
             );
             const list: any[] = Array.isArray(apps)
               ? apps
@@ -5185,7 +5716,7 @@ Roles are keys from list_app_roles, plus "*" (any signed-in user) and "public". 
       let createdAppId: string | undefined;
       const created = await client.request<any>(
         "POST",
-        `/organizations/${orgId}/projects`,
+        `/organizations/${idSeg(orgId)}/projects`,
         {
           name: project.name,
           organizationId: orgId,
@@ -5390,7 +5921,7 @@ Roles are keys from list_app_roles, plus "*" (any signed-in user) and "public". 
         if (api) {
           const app = await client.request<any>(
             "POST",
-            `/organizations/${orgId}/apps`,
+            `/organizations/${idSeg(orgId)}/apps`,
             {
               name: api.name || `${project.name} API`,
               projectId: created.id,
@@ -5399,7 +5930,7 @@ Roles are keys from list_app_roles, plus "*" (any signed-in user) and "public". 
           createdAppId = app.id;
           await client.request(
             "POST",
-            `/organizations/${orgId}/apps/${app.id}/publish`,
+            `/organizations/${idSeg(orgId)}/apps/${app.id}/publish`,
             {},
           );
           const methods = api.methods?.length
@@ -5462,7 +5993,7 @@ Roles are keys from list_app_roles, plus "*" (any signed-in user) and "public". 
             if (rowLevelSecurity?.enabled) anyRls = true;
             await client.request(
               "POST",
-              `/organizations/${orgId}/apps/${app.id}/endpoints`,
+              `/organizations/${idSeg(orgId)}/apps/${app.id}/endpoints`,
               {
                 boardId: b.id,
                 slug: b.slug,
@@ -5491,7 +6022,7 @@ Roles are keys from list_app_roles, plus "*" (any signed-in user) and "public". 
           const scopes = writes ? ["read", "write"] : ["read"];
           const key = await client.request<any>(
             "POST",
-            `/organizations/${orgId}/apps/${app.id}/api-keys`,
+            `/organizations/${idSeg(orgId)}/apps/${app.id}/api-keys`,
             {
               name: "frontend",
               scopes,
@@ -5548,13 +6079,13 @@ Roles are keys from list_app_roles, plus "*" (any signed-in user) and "public". 
           if (createdAppId) {
             await client.request(
               "DELETE",
-              `/organizations/${orgId}/apps/${createdAppId}`,
+              `/organizations/${idSeg(orgId)}/apps/${idSeg(createdAppId)}`,
             );
             undone.push("app");
           }
           await client.request(
             "DELETE",
-            `/organizations/${orgId}/projects/${created.id}`,
+            `/organizations/${idSeg(orgId)}/projects/${created.id}`,
           );
           undone.push("project");
         } catch {
@@ -5657,7 +6188,7 @@ Roles are keys from list_app_roles, plus "*" (any signed-in user) and "public". 
 
       const automation = await getApi().request<any>(
         "POST",
-        `/projects/${projectId}/boards/${boardId}/automations`,
+        `/projects/${idSeg(projectId)}/boards/${idSeg(boardId)}/automations`,
         {
           name,
           trigger,
@@ -5669,7 +6200,7 @@ Roles are keys from list_app_roles, plus "*" (any signed-in user) and "public". 
       );
       return ok({
         automation,
-        adminUrl: getApi().appUrl(`/projects/${projectId}/boards/${boardId}`),
+        adminUrl: getApi().appUrl(`/projects/${idSeg(projectId)}/boards/${idSeg(boardId)}`),
       });
     },
   );
@@ -5733,7 +6264,7 @@ Roles are keys from list_app_roles, plus "*" (any signed-in user) and "public". 
       return ok(
         await getApi().request(
           "PATCH",
-          `/projects/${projectId}/boards/${boardId}/automations/${automationId}`,
+          `/projects/${idSeg(projectId)}/boards/${idSeg(boardId)}/automations/${idSeg(automationId)}`,
           body,
         ),
       );
@@ -5755,7 +6286,7 @@ Roles are keys from list_app_roles, plus "*" (any signed-in user) and "public". 
       ok(
         await getApi().request(
           "GET",
-          `/projects/${projectId}/boards/${boardId}/automations`,
+          `/projects/${idSeg(projectId)}/boards/${idSeg(boardId)}/automations`,
         ),
       ),
   );
@@ -5773,7 +6304,7 @@ Roles are keys from list_app_roles, plus "*" (any signed-in user) and "public". 
     },
     async ({ organizationId }) => {
       const orgId = await resolveOrg(organizationId);
-      return ok(await getApi().request("GET", `/organizations/${orgId}/apps`));
+      return ok(await getApi().request("GET", `/organizations/${idSeg(orgId)}/apps`));
     },
   );
 
@@ -5803,7 +6334,7 @@ Roles are keys from list_app_roles, plus "*" (any signed-in user) and "public". 
       return ok(
         await getApi().request(
           "GET",
-          `/organizations/${orgId}/apps/${appId}/spec/${shape}`,
+          `/organizations/${idSeg(orgId)}/apps/${idSeg(appId)}/spec/${shape}`,
         ),
       );
     },
@@ -5831,7 +6362,7 @@ Roles are keys from list_app_roles, plus "*" (any signed-in user) and "public". 
       return ok(
         await getApi().request(
           "GET",
-          `/organizations/${orgId}/apps/${appId}/spec/prompt/${tool}`,
+          `/organizations/${idSeg(orgId)}/apps/${idSeg(appId)}/spec/prompt/${tool}`,
         ),
       );
     },
@@ -5877,10 +6408,10 @@ Roles are keys from list_app_roles, plus "*" (any signed-in user) and "public". 
         : `project:${d.projectId}`;
   const docPath = (d: DocRef): string =>
     d.kind === "item"
-      ? `/projects/${d.projectId}/boards/${d.boardId}/items/${d.itemId}`
+      ? `/projects/${idSeg(d.projectId)}/boards/${idSeg(d.boardId)}/items/${idSeg(d.itemId)}`
       : d.kind === "board"
-        ? `/projects/${d.projectId}/boards/${d.boardId}`
-        : `/projects/${d.projectId}`;
+        ? `/projects/${idSeg(d.projectId)}/boards/${idSeg(d.boardId)}`
+        : `/projects/${idSeg(d.projectId)}`;
   // ChatGPT contract: the object as structuredContent AND JSON-encoded in content.
   const structured = (doc: Record<string, unknown>) => {
     const clean = sanitizeUsersDeep(doc) as Record<string, unknown>;
@@ -6012,7 +6543,7 @@ Roles are keys from list_app_roles, plus "*" (any signed-in user) and "public". 
           try {
             return await api.request<any>(
               "GET",
-              `/organizations/${c}/projects/${ref.projectId}`,
+              `/organizations/${idSeg(c)}/projects/${idSeg(ref.projectId)}`,
             );
           } catch (e) {
             lastErr = e;
@@ -6046,28 +6577,6 @@ Roles are keys from list_app_roles, plus "*" (any signed-in user) and "public". 
 
   // ── Frontend hosting ({slug}.tasklite.dev) ────────────────────────────────
 
-  // Shared by the three deploy_frontend inputs: the zip must serve index.html
-  // at its root. A zip whose only top-level entry is a folder (how most
-  // exporters and GitHub pack a build) is re-rooted rather than rejected.
-  const normalizeBundle = (zip: AdmZip): AdmZip => {
-    const entries = zip
-      .getEntries()
-      .filter((e) => !e.isDirectory && !e.entryName.startsWith("__MACOSX/"));
-    if (entries.some((e) => e.entryName === "index.html")) return zip;
-    const tops = new Set(entries.map((e) => e.entryName.split("/")[0]));
-    if (tops.size === 1) {
-      const [top] = [...tops];
-      if (entries.some((e) => e.entryName === `${top}/index.html`)) {
-        const out = new AdmZip();
-        for (const e of entries)
-          out.addFile(e.entryName.slice(top.length + 1), e.getData());
-        return out;
-      }
-    }
-    throw new Error(
-      "The bundle has no index.html at its root. Pass the build OUTPUT (dist/, build/, out/), not the project source.",
-    );
-  };
   // The hosting takes 95 MB packed (a copied WordPress site with its pages and scripts), under the 100 MB a request
   // through Cloudflare may carry.
   const MAX_BUNDLE = 95 * 1024 * 1024;
@@ -6081,7 +6590,7 @@ Roles are keys from list_app_roles, plus "*" (any signed-in user) and "public". 
 
   tool(
     "deploy_frontend",
-    "Deploy a static frontend to TaskLite hosting and get a live URL https://{slug}.tasklite.dev (HTTPS, auto-published on first deploy, versions kept for rollback_deployment). Hand over the frontend in ONE of three ways: `files`, the files inline (path + content), the way to go from ChatGPT or any hosted client: write index.html and its assets, then deploy in the same turn; `zipUrl`, a public https URL of a zip (a Lovable/Bolt export, a GitHub release asset); `dir`, a build output folder on this machine (only when the MCP runs locally next to the files); `fromAppId`, a version already hosted in the same organization, copied on the server (start a new app from an existing site, or bring an old version back as a new one; get_deployment_files reads a version first). A real build that already exists on the person's machine fits none of these from a hosted server: tell them to drop the zip on the app's Versions screen (the adminUrl of the app, then Versions), which deploys the same way and keeps the same version history. In the frontend, call the app API via relative /api/{endpoint}, the hosting proxy injects the app identity, so no key ships to the browser.",
+    `Deploy a static frontend to TaskLite hosting and get a live URL https://{slug}.tasklite.dev (HTTPS, auto-published on first deploy, versions kept for rollback_deployment). Hand over the frontend in ONE of ${hosted ? "three" : "four"} ways: \`files\`, the files inline (path + content), the way to go from ChatGPT or any hosted client: write index.html and its assets, then deploy in the same turn; \`zipUrl\`, a public https URL of a zip (a Lovable/Bolt export, a GitHub release asset); ${hosted ? "" : "\`dir\`, a build output folder on this machine (only when the MCP runs locally next to the files); "}\`fromAppId\`, a version already hosted in the same organization, copied on the server (start a new app from an existing site, or bring an old version back as a new one; get_deployment_files reads a version first). A real build that already exists on the person's machine fits none of these from a hosted server: tell them to drop the zip on the app's Versions screen (the adminUrl of the app, then Versions), which deploys the same way and keeps the same version history. In the frontend, call the app API via relative /api/{endpoint}, the hosting proxy injects the app identity, so no key ships to the browser.`,
     {
       appId: z
         .string()
@@ -6117,12 +6626,17 @@ Roles are keys from list_app_roles, plus "*" (any signed-in user) and "public". 
         .describe(
           "Public https URL of a zip of the BUILD OUTPUT (index.html at the root, or inside a single top-level folder). Up to 95MB",
         ),
-      dir: z
-        .string()
-        .optional()
-        .describe(
-          "Local path to the BUILD OUTPUT directory (the one containing index.html), not the project root. Only where the MCP runs on the same machine as the files. A folder too big for one upload (over 95MB zipped, a copied WordPress store) is sent in parts and goes live as one version",
-        ),
+      // Not offered by the hosted server: there `dir` would be the server's own disk.
+      ...(hosted
+        ? {}
+        : {
+            dir: z
+              .string()
+              .optional()
+              .describe(
+                "Local path to the BUILD OUTPUT directory (the one containing index.html), not the project root. Only where the MCP runs on the same machine as the files. A folder too big for one upload (over 95MB zipped, a copied WordPress store) is sent in parts and goes live as one version",
+              ),
+          }),
       fromAppId: z
         .string()
         .optional()
@@ -6165,6 +6679,11 @@ Roles are keys from list_app_roles, plus "*" (any signed-in user) and "public". 
       fromVersion?: number;
       organizationId?: string;
     }) => {
+      if (hosted && dir !== undefined) {
+        throw new Error(
+          "dir is not available on the hosted server, which has no access to your files. Pass the site as `files` (inline) or `zipUrl` (a public https zip), or have the person upload the zip on the app's Versions screen.",
+        );
+      }
       const given = [
         files ? "files" : "",
         zipUrl ? "zipUrl" : "",
@@ -6174,7 +6693,9 @@ Roles are keys from list_app_roles, plus "*" (any signed-in user) and "public". 
       if (given.length !== 1) {
         throw new Error(
           given.length === 0
-            ? "Pass the frontend as `files` (inline), `zipUrl` (public zip), `dir` (local build folder) or `fromAppId` (copy a hosted version)."
+            ? hosted
+              ? "Pass the frontend as `files` (inline), `zipUrl` (public zip) or `fromAppId` (copy a hosted version)."
+              : "Pass the frontend as `files` (inline), `zipUrl` (public zip), `dir` (local build folder) or `fromAppId` (copy a hosted version)."
             : `Pass only one of files / zipUrl / dir / fromAppId (got ${given.join(", ")}).`,
         );
       }
@@ -6190,7 +6711,7 @@ Roles are keys from list_app_roles, plus "*" (any signed-in user) and "public". 
       if (fromAppId) {
         const copied = await getApi().request<Record<string, unknown>>(
           "POST",
-          `/organizations/${orgId}/apps/${appId}/deployments/copy`,
+          `/organizations/${idSeg(orgId)}/apps/${idSeg(appId)}/deployments/copy`,
           { fromAppId, ...(fromVersion ? { fromVersion } : {}) },
         );
         const { published: publishedByThisDeploy, ...rest } = copied;
@@ -6239,28 +6760,9 @@ Roles are keys from list_app_roles, plus "*" (any signed-in user) and "public". 
         }
         buffer = zip.toBuffer();
       } else if (zipUrl) {
-        const u = new URL(zipUrl);
-        if (u.protocol !== "https:") throw new Error("zipUrl must be https.");
-        if (
-          /^(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|\[?::1)/.test(
-            u.hostname,
-          ) ||
-          /^\d+\.\d+\.\d+\.\d+$/.test(u.hostname)
-        ) {
-          throw new Error(
-            "zipUrl must point at a public host, not a private address.",
-          );
-        }
-        const res = await fetch(zipUrl, {
-          redirect: "follow",
-          headers: { accept: "application/zip, application/octet-stream, */*" },
-        });
-        if (!res.ok)
-          throw new Error(`Could not download zipUrl: HTTP ${res.status}.`);
-        const declared = Number(res.headers.get("content-length") || 0);
-        checkBundleSize(declared);
-        const raw = Buffer.from(await res.arrayBuffer());
-        checkBundleSize(raw.length);
+        // https only, public addresses only, redirects checked hop by hop,
+        // body streamed and cut at the limit (see safe-fetch.ts).
+        const raw = await downloadPublicZip(zipUrl, MAX_BUNDLE);
         let zip: AdmZip;
         try {
           zip = new AdmZip(raw);
@@ -6274,7 +6776,7 @@ Roles are keys from list_app_roles, plus "*" (any signed-in user) and "public". 
         const abs = resolvePath(dir as string);
         if (!existsSync(abs) || !statSync(abs).isDirectory()) {
           throw new Error(
-            `Directory not found: ${abs}. Run the build first, then pass the output folder (dist/, build/, out/). If the MCP is not running on the machine with the files (a hosted connector never is), pass them as \`files\`, or a \`zipUrl\`, or have the person upload the zip on the app's Versions screen at ${getApi().appUrl(`/apps/${appId}/deployments`)}.`,
+            `Directory not found: ${abs}. Run the build first, then pass the output folder (dist/, build/, out/). If the MCP is not running on the machine with the files (a hosted connector never is), pass them as \`files\`, or a \`zipUrl\`, or have the person upload the zip on the app's Versions screen at ${getApi().appUrl(`/apps/${idSeg(appId)}/deployments`)}.`,
           );
         }
         if (!existsSync(joinPath(abs, "index.html"))) {
@@ -6299,7 +6801,7 @@ Roles are keys from list_app_roles, plus "*" (any signed-in user) and "public". 
             };
             if (uploadId) fields.uploadId = uploadId;
             last = await getApi().requestUpload<Record<string, unknown>>(
-              `/organizations/${orgId}/apps/${appId}/deployments/parts`,
+              `/organizations/${idSeg(orgId)}/apps/${idSeg(appId)}/deployments/parts`,
               "file",
               `part-${i + 1}.zip`,
               packed.part(i),
@@ -6319,7 +6821,7 @@ Roles are keys from list_app_roles, plus "*" (any signed-in user) and "public". 
       checkBundleSize(buffer.length);
 
       const result = await getApi().requestUpload<Record<string, unknown>>(
-        `/organizations/${orgId}/apps/${appId}/deployments`,
+        `/organizations/${idSeg(orgId)}/apps/${idSeg(appId)}/deployments`,
         "file",
         "frontend.zip",
         buffer,
@@ -6355,7 +6857,7 @@ Roles are keys from list_app_roles, plus "*" (any signed-in user) and "public". 
       return ok(
         await getApi().request(
           "GET",
-          `/organizations/${orgId}/apps/${appId}/deployments`,
+          `/organizations/${idSeg(orgId)}/apps/${idSeg(appId)}/deployments`,
         ),
       );
     },
@@ -6417,7 +6919,7 @@ Roles are keys from list_app_roles, plus "*" (any signed-in user) and "public". 
       return ok(
         await getApi().request(
           "GET",
-          `/organizations/${orgId}/apps/${appId}/deployments/files${suffix}`,
+          `/organizations/${idSeg(orgId)}/apps/${idSeg(appId)}/deployments/files${suffix}`,
         ),
       );
     },
@@ -6447,7 +6949,7 @@ Roles are keys from list_app_roles, plus "*" (any signed-in user) and "public". 
       return ok(
         await getApi().request(
           "POST",
-          `/organizations/${orgId}/apps/${appId}/deployments/${version}/activate`,
+          `/organizations/${idSeg(orgId)}/apps/${idSeg(appId)}/deployments/${version}/activate`,
         ),
       );
     },
