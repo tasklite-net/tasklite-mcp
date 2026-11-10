@@ -1205,6 +1205,29 @@ test('get_item_history reads the internal history route with limit and before', 
   assert.equal(h.calls[0].path, '/organizations/org-2/items/i1/history');
 });
 
+test('get_permission_history reads the permissions history of the app, with paging', async () => {
+  let h = await harness();
+  const res = await h.call('get_permission_history', { appId: 'crm' });
+  assert.equal(res.isError, false, res.text);
+  assert.deepEqual(h.calls, [{ method: 'GET', path: `${PERM}/history`, body: undefined }]);
+
+  h = await harness();
+  await h.call('get_permission_history', { appId: 'crm', limit: 20, before: '2026-11-10T08:00:00Z' });
+  assert.equal(h.calls[0].path, `${PERM}/history?limit=20&before=2026-11-10T08%3A00%3A00Z`);
+
+  h = await harness();
+  const bad = await h.call('get_permission_history', { appId: 'crm', limit: 500 });
+  assert.equal(bad.isError, true);
+  assert.equal(h.calls.length, 0);
+});
+
+test('set_board_policy describes a two-hop via', async () => {
+  const { client } = await harness();
+  const { tools } = await client.listTools();
+  const d = tools.find((t) => t.name === 'set_board_policy').description;
+  assert.ok(d.includes('"via": ["<id>", "<id>"]'));
+});
+
 test('tools/list: permissions tools are registered, and set_board_policy carries the example', async () => {
   const { client } = await harness();
   const { tools } = await client.listTools();
@@ -1213,6 +1236,7 @@ test('tools/list: permissions tools are registered, and set_board_policy carries
     'list_app_roles', 'define_app_role', 'delete_app_role', 'grant_app_role', 'revoke_app_role',
     'list_app_role_grants', 'get_policy_identity', 'set_policy_identity', 'get_board_policy',
     'set_board_policy', 'delete_board_policy', 'explain_access', 'simulate_request', 'get_item_history',
+    'get_permission_history',
   ]) {
     assert.ok(byName.get(name), `${name} is registered`);
   }

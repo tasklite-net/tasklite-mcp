@@ -972,6 +972,13 @@ const ANNOTATIONS: Record<string, Record<string, unknown>> = {
     idempotentHint: true,
     openWorldHint: false,
   },
+  get_permission_history: {
+    title: "Read the history of permission changes",
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: true,
+    openWorldHint: false,
+  },
   set_board_policy: {
     title: "Set a board's access policy",
     readOnlyHint: false,
@@ -4547,14 +4554,49 @@ export function registerTools(
   );
 
   tool(
+    "get_permission_history",
+    "What changed in who may do what in an app, newest first: role defined, renamed or deleted (with who lost it), a role granted or revoked, the identity board set or cleared, a board policy set or deleted. Each change has when (at), who made it (by), the role, board or user it is about, and the value before and after. The server keeps it 180 days. A role that comes from the people board (set_policy_identity) changes by editing that row, and that change is in the row's history (get_item_history), not here. Requires organization owner or admin.",
+    {
+      appId: appIdShape,
+      limit: z
+        .number()
+        .int()
+        .min(1)
+        .max(200)
+        .optional()
+        .describe("How many changes (default 50, at most 200)"),
+      before: z
+        .string()
+        .optional()
+        .describe(
+          "ISO 8601 time: only changes older than it (the at of the last change of the previous page)",
+        ),
+      organizationId: orgIdShape,
+    },
+    async ({ appId, limit, before, organizationId }) => {
+      const orgId = await resolveOrg(organizationId);
+      const qs = new URLSearchParams();
+      if (limit !== undefined) qs.set("limit", String(limit));
+      if (before) qs.set("before", before);
+      const q = qs.toString();
+      return ok(
+        await getApi().request(
+          "GET",
+          `${permBase(orgId, appId)}/history${q ? `?${q}` : ""}`,
+        ),
+      );
+    },
+  );
+
+  tool(
     "set_board_policy",
     `Set who may read, write, create and delete rows of a board, and which columns, as a JSON document (a FULL REPLACE of the board's policy; read get_board_policy first to change part of one). It is enforced on the app's endpoints of this board whose rowLevelSecurity.mode is "policy" (create_app_endpoint / update_app_endpoint). Organization owners, admins and editors using the app are let through unless internalBypass is false. Fields:
 - schemaVersion: 1 (required).
 - internalBypass: default true.
-- rows.read / rows.write: a list of { roles, scope }. scope is "all", { "mine": "<column id>" } (rows whose column points at the caller: a relation to the row that stands for them, their verified phone or email, or a people column; add "via": "<relation column id>" for one more hop), { "created": true } (rows they created through the app) or { "where": CONDITION } (rows a condition selects, e.g. open cases older than 3 days, for an escalation view). A user gets the union of the rules that name any of their roles; no rule for their roles means no access.
+- rows.read / rows.write: a list of { roles, scope }. scope is "all", { "mine": "<column id>" } (rows whose column points at the caller: a relation to the row that stands for them, their verified phone or email, or a people column; add "via": "<relation column id>" for one more hop, or "via": ["<id>", "<id>"] for two, e.g. tenant -> apartment -> framework -> staff is { "mine": "<tenant.apartment>", "via": ["<apartment.framework>", "<framework.managers>"] }; each hop is a relation column of the board the step before points to, and the last one ends at the people board), { "created": true } (rows they created through the app) or { "where": CONDITION } (rows a condition selects, e.g. open cases older than 3 days, for an escalation view). A user gets the union of the rules that name any of their roles; no rule for their roles means no access.
 - rows.create / rows.delete: plain role lists.
 - columns: { "<column id or reserved field>": { "read": ACCESS, "write": ACCESS } }. ACCESS is a role list, or { "roles": [...], "orMine": "<column id>" } (these roles, or anyone for whom the row is theirs by that column). A column without an entry follows the row rules. An EMPTY list ("write": []) locks the column for everyone through the app: use it for assignedTo and for any field only an admin or an action may change. Reserved fields are title, description, status, priority, dueDate and assignedTo, addressed by those names. Reserved fields are open to anyone who may write the row unless you lock them, so lock assignedTo.
-- CONDITION (in where, rules.when): { "all": [c...] } | { "any": [c...] } | { "not": c } | a leaf { "col": "<column id or reserved field>", "op": OP, ... }. OP: eq / neq (with "value"), in (value is a list), empty, notEmpty, isMe (the column points at the caller; optional "via"), olderThan (col is updatedAt, createdAt or a date column; give "hours" or "days"), changed (this write sets col; only in rules). No free expressions.
+- CONDITION (in where, rules.when): { "all": [c...] } | { "any": [c...] } | { "not": c } | a leaf { "col": "<column id or reserved field>", "op": OP, ... }. OP: eq / neq (with "value"), in (value is a list), empty, notEmpty, isMe (the column points at the caller; optional "via", one column id or a list of two), olderThan (col is updatedAt, createdAt or a date column; give "hours" or "days"), changed (this write sets col; only in rules). No free expressions.
 - rules: [{ "id", "when": CONDITION, "deny": { "write": "*" | [column ids], "except": [roles] }, "require": [column ids that must be filled after the write], "except": [roles], "message" }]. deny is judged on the row as it is BEFORE the write, require AFTER it. Rules bind people acting through the app; internal bypass users and an action's own columns are not held to deny.
 - actions: { "<name>": { "roles": [...], "input": { "<input name>": { "col": "<column id the value is written to>", "required": true } }, "set": { "<column id>": constant }, "event": "TRANSFER", "scope": "write" | "read", "approval": "<approval workflow id of the board>" } }. An action is role-gated, validates its input (an input without col is only data; "reason" is always accepted and goes to the history), writes its set and bound inputs in one transaction, and records event and reason in the history. It is the only way to change a column whose write is []. With approval it files a request for that workflow instead of writing; the write happens when the last step approves. Roles named by approval steps must exist (define_app_role). Actions run through the App API only (see below).
 Frontends run an action with POST /apps/<slug>/api/<endpoint>/<itemId>/actions/<name> and the inputs as the body; approvers read GET /apps/<slug>/api/me/approvals and answer POST /apps/<slug>/api/approvals/<requestId>/decide { "decision": "approve" | "reject", "comment"? }; GET /apps/<slug>/api/me/permissions lists the actions the caller may run as [{ name, allowed, roles, inputs, approval, event, scope }]. There is no MCP tool that runs an action.
