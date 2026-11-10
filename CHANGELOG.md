@@ -5,6 +5,9 @@ are folded into the next published one, so the numbers on npm may skip.
 
 ## Unreleased
 
+- `get_permission_history`: what changed in roles, grants, the identity board and board policies of an app, with who and when and the value before and after (needs the backend with tasklite-net/tasklite#429).
+- `set_board_policy`: `via` may list two relation columns, a scope two hops away (tenant -> apartment -> framework -> staff; needs tasklite-net/tasklite#431).
+
 ## 0.22.2
 
 ### Security
