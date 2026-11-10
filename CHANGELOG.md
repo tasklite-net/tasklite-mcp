@@ -20,13 +20,25 @@ are folded into the next published one, so the numbers on npm may skip.
   redirects are followed by hand (at most 3) and re-checked at every hop; the connection is pinned to
   the checked address; the body is streamed and cut off at the bundle limit. Zip entries with
   absolute paths or `..` segments are refused and a zip that unpacks over 300 MB is refused.
-- Ids supplied by the model (organization, app, project, board, item, document and the like) are
-  checked against `^[A-Za-z0-9_-]{1,128}# Changelog
+- Ids supplied by the model (organization, app, project, board, item, document, calendar and the like) are
+  checked against `^[A-Za-z0-9_-]{1,128}$` before they go into a URL path.
 
-All notable changes to `@tasklite/mcp`. Versions that were never published
-are folded into the next published one, so the numbers on npm may skip.
+### Added
+- Google Calendar end to end, ten tools: `google_calendar_status`, `google_calendar_connect`
+  (a 24-hour link the person opens; with `appId` and `returnPath` the browser comes back to that
+  app's site on its current domain), `google_calendar_set_return_path`,
+  `google_calendar_ensure_calendar`, `google_calendar_list_events`, `google_calendar_create_event`,
+  `google_calendar_update_event`, `google_calendar_delete_event`, `google_calendar_busy`,
+  `google_calendar_disconnect`. The connection is the signed-in user's, held by TaskLite; writes
+  go to calendars TaskLite creates in that Google account. Needs the backend change
+  (tasklite-net/tasklite#426): status, single-event routes, `connectUrl`
+  and `appId`/`returnPath` on initiate.
 
- before they go into a URL path.
+### Changed
+- `create_column`, `update_column` and the server instructions describe sealed columns
+  (`settings.sealed: { normalize: "il_id" | "digits" | "text" }`): an ID number is stored only as
+  a keyed server-side fingerprint, found by filtering with the plain value, and kept unique with
+  `settings.validation.unique`. Needs the backend change (tasklite-net/tasklite, sealed columns).
 
 ## 0.22.1, 2026-11-08
 

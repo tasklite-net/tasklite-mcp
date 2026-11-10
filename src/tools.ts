@@ -836,6 +836,77 @@ const ANNOTATIONS: Record<string, Record<string, unknown>> = {
     idempotentHint: true,
     openWorldHint: false,
   },
+  google_calendar_status: {
+    title: "Google Calendar connection status",
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: true,
+    openWorldHint: false,
+  },
+  google_calendar_connect: {
+    title: "Get a Google Calendar connection link",
+    readOnlyHint: false,
+    destructiveHint: false,
+    idempotentHint: false,
+    openWorldHint: false,
+  },
+  google_calendar_set_return_path: {
+    title: "Set where the Google connection returns to",
+    readOnlyHint: false,
+    destructiveHint: false,
+    idempotentHint: true,
+    openWorldHint: false,
+  },
+  google_calendar_disconnect: {
+    title: "Disconnect Google Calendar",
+    readOnlyHint: false,
+    destructiveHint: true,
+    idempotentHint: true,
+    openWorldHint: true,
+  },
+  google_calendar_ensure_calendar: {
+    title: "Find or create the app's calendar",
+    readOnlyHint: false,
+    destructiveHint: false,
+    idempotentHint: true,
+    openWorldHint: true,
+  },
+  google_calendar_list_events: {
+    title: "List calendar events",
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: true,
+    openWorldHint: true,
+  },
+  google_calendar_create_event: {
+    title: "Add a calendar event",
+    readOnlyHint: false,
+    destructiveHint: false,
+    // With key the same call twice keeps one event.
+    idempotentHint: false,
+    openWorldHint: true,
+  },
+  google_calendar_update_event: {
+    title: "Change a calendar event",
+    readOnlyHint: false,
+    destructiveHint: false,
+    idempotentHint: true,
+    openWorldHint: true,
+  },
+  google_calendar_delete_event: {
+    title: "Delete a calendar event",
+    readOnlyHint: false,
+    destructiveHint: true,
+    idempotentHint: true,
+    openWorldHint: true,
+  },
+  google_calendar_busy: {
+    title: "Busy times in Google Calendar",
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: true,
+    openWorldHint: true,
+  },
   configure_app_settings: {
     title: "Read or change app settings",
     readOnlyHint: false,
@@ -1912,7 +1983,7 @@ export function registerTools(
 
   tool(
     "create_column",
-    "Add a typed column to a board. Valid types: text, rich_text, number, status, date, datetime, duration, people, checkbox, dropdown, label, priority, link, email, phone, relation, lookup, rollup, formula, rating, currency, file. Choose by meaning, date for dates, phone for phones, number/currency for amounts, dropdown/status (with settings.options as an array of labels) for closed choices; text is for free text only. An obvious name/type mismatch is rejected with the suggested type; pass force:true to override. Rules go in settings.validation: { unique, min, max, minLength, maxLength, pattern, patternMessage }, enforced on every write (UI, MCP, App API). Closed choices (dropdown/status) reject values outside settings.options unless settings.allowCustom is true.",
+    "Add a typed column to a board. Valid types: text, rich_text, number, status, date, datetime, duration, people, checkbox, dropdown, label, priority, link, email, phone, relation, lookup, rollup, formula, rating, currency, file. Choose by meaning, date for dates, phone for phones, number/currency for amounts, dropdown/status (with settings.options as an array of labels) for closed choices; text is for free text only. An obvious name/type mismatch is rejected with the suggested type; pass force:true to override. Rules go in settings.validation: { unique, min, max, minLength, maxLength, pattern, patternMessage }, enforced on every write (UI, MCP, App API). Closed choices (dropdown/status) reject values outside settings.options unless settings.allowCustom is true. Sensitive identifiers (an Israeli ID number, a passport or account number) go in a sealed text column: settings.sealed: { normalize: \"il_id\" | \"digits\" | \"text\" }, usually with settings.validation.unique. The App API then stores only a keyed server-side fingerprint (hmac:v1:<hex>, under a secret key of the organization that never reaches the browser) and returns that on read; the page sends the plain value and must not hash it itself. A GET with filter[field]=<plain value> (eq, ne, in, empty) finds the row, a duplicate POST is refused with VALUE_NOT_UNIQUE, an invalid ID with INVALID_IL_ID. Every other write path (set_cell, create_item, the UI) refuses a plain value there (SEALED_COLUMN), and a column that already holds plain values cannot be sealed: create a new one.",
     {
       projectId: z
         .string()
@@ -1930,7 +2001,7 @@ export function registerTools(
         .record(z.any())
         .optional()
         .describe(
-          'Type-specific settings. For dropdown/status/priority: options, either as labels ["A","B"] or as full objects [{value,label,color}], labels are expanded server-side, and colors are assigned if you do not supply them.',
+          'Type-specific settings. For dropdown/status/priority: options, either as labels ["A","B"] or as full objects [{value,label,color}], labels are expanded server-side, and colors are assigned if you do not supply them. For a sealed text column (ID numbers): { sealed: { normalize: "il_id" }, validation: { unique: true } }.',
         ),
       isRequired: z
         .boolean()
@@ -2093,7 +2164,7 @@ export function registerTools(
         .record(z.unknown())
         .optional()
         .describe(
-          "Replaces the column settings, e.g. { options: [...] } for dropdown/status",
+          "Replaces the column settings, e.g. { options: [...] } for dropdown/status. A sealed column stays sealed unless the new settings say sealed: false; normalize cannot change once it holds values.",
         ),
       isRequired: z
         .boolean()
@@ -3890,6 +3961,394 @@ export function registerTools(
         `/organizations/${idSeg(orgId)}/apps/${idSeg(appId)}/endpoints/${idSeg(endpointId)}`,
       );
       return ok({ deleted: true, endpointId });
+    },
+  );
+
+  // ── Google Calendar ────────────────────────────────────────────────────────
+  // The connection is the CALLER's own (the TaskLite user of this credential),
+  // held by TaskLite on the server: no Google key or token ever reaches here or
+  // the app. Write access is to calendars TaskLite creates in that Google
+  // account (Google's calendar.app.created); reading busy time in the person's
+  // other calendars is a second, optional consent (includeBusyRead).
+
+  const GCAL = "/integrations/google-calendar";
+  const GCAL_ORG = z
+    .string()
+    .optional()
+    .describe("Organization id; defaults to the credential organization when omitted");
+  const GCAL_TZ = z
+    .string()
+    .optional()
+    .describe('IANA timezone the dates and times are in, default "Asia/Jerusalem"');
+  const GCAL_CAL = {
+    calendarId: z
+      .string()
+      .optional()
+      .describe("The calendar's id (from google_calendar_ensure_calendar). Omit to use the calendar named calendarName"),
+    calendarName: z
+      .string()
+      .optional()
+      .describe('The calendar TaskLite keeps in the Google account, found or created by this name. Default "פגישות"'),
+  };
+  const DATE = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "YYYY-MM-DD");
+  const TIME = z.string().regex(/^\d{1,2}:\d{2}$/, "HH:MM");
+  const q = (params: Record<string, string | undefined>) =>
+    Object.entries(params)
+      .filter((e): e is [string, string] => e[1] !== undefined && e[1] !== "")
+      .map(([k, v]) => `${k}=${encodeURIComponent(v)}`)
+      .join("&");
+  const gcalHint = (e: unknown): never => {
+    const msg = e instanceof Error ? e.message : String(e);
+    if (/is not connected|Integration not found/i.test(msg)) {
+      throw new Error(
+        `${msg}. Google Calendar is not connected for this user: call google_calendar_connect and send the link to the person to open.`,
+      );
+    }
+    if (/GOOGLE_REAUTH_REQUIRED|must be reconnected/i.test(msg)) {
+      throw new Error(
+        `${msg}. Google no longer accepts this connection (revoked or expired): call google_calendar_connect for a new link.`,
+      );
+    }
+    if (/GOOGLE_CALENDAR_READ_SCOPE_REQUIRED/.test(msg)) {
+      throw new Error(
+        `${msg}. Reading busy time needs a second consent: call google_calendar_connect with includeBusyRead true and send that link.`,
+      );
+    }
+    throw e;
+  };
+  const calendarIdFor = async (
+    orgId: string,
+    o: { calendarId?: string; calendarName?: string; timeZone?: string },
+  ): Promise<string> => {
+    if (o.calendarId) return o.calendarId;
+    const r = await getApi()
+      .request<any>("POST", `${GCAL}/calendar?${q({ organizationId: orgId })}`, {
+        summary: o.calendarName || "פגישות",
+        timeZone: o.timeZone || "Asia/Jerusalem",
+        organizationId: orgId,
+      })
+      .catch(gcalHint);
+    if (!r?.calendarId) throw new Error("The calendar could not be found or created");
+    return String(r.calendarId);
+  };
+
+  tool(
+    "google_calendar_status",
+    "Whether the signed-in user has connected Google Calendar to TaskLite, which Google account, and what the connection may do: canWriteOwnCalendars (add, change and delete events in the calendars TaskLite creates in that account), canReadBusy (read when the person is already busy in their other calendars, a second consent), needsReconnect (Google stopped accepting it: a new google_calendar_connect link is needed). The connection belongs to the user, not to an app: every app of the user writes through it. Never returns a token.",
+    { organizationId: GCAL_ORG },
+    async ({ organizationId }: { organizationId?: string }) => {
+      const orgId = await resolveOrg(organizationId);
+      return ok(
+        await getApi().request("GET", `${GCAL}/status?${q({ organizationId: orgId })}`),
+      );
+    },
+  );
+
+  tool(
+    "google_calendar_connect",
+    "Get the link that connects the signed-in user's Google Calendar to TaskLite. Send connectUrl to the person as is: they open it, approve on Google's own page, and come back. It lasts 24 hours and can be opened again in that time; calling again makes a new one. Only that person can approve: the link connects whichever Google account approves it to THIS TaskLite user, so send it only to them. With appId the browser comes back to that app's site, on the domain the app has at that moment (its custom domain, else <slug>.tasklite.dev), at returnPath (a path such as \"/#admin\"), or at the path saved with google_calendar_set_return_path, else \"/\". Without appId it ends on a TaskLite page that says the calendar is connected. includeBusyRead true also asks to read busy time (the person's existing meetings) so bookings can avoid them; Google calls that a sensitive permission and shows a stronger consent screen, so ask for it only when the person wants it. Asking again later keeps the write access already given. Afterwards google_calendar_status shows connected.",
+    {
+      appId: z.string().optional().describe("App id or slug whose site the browser returns to"),
+      returnPath: z
+        .string()
+        .optional()
+        .describe('A path on the app\'s site starting with "/", e.g. "/#admin" or "/admin/calendar". Not an address: the domain is the app\'s'),
+      includeBusyRead: z
+        .boolean()
+        .optional()
+        .describe("Also ask to read busy time in the person's other calendars. Default false"),
+      organizationId: GCAL_ORG,
+    },
+    async ({
+      appId,
+      returnPath,
+      includeBusyRead,
+      organizationId,
+    }: {
+      appId?: string;
+      returnPath?: string;
+      includeBusyRead?: boolean;
+      organizationId?: string;
+    }) => {
+      if (returnPath !== undefined && !appId) {
+        throw new Error("returnPath needs appId: it is a path on that app's site.");
+      }
+      const orgId = await resolveOrg(organizationId);
+      const r = await getApi().request<any>(
+        "POST",
+        `/integrations/oauth/google_calendar/initiate?${q({ orgId })}`,
+        {
+          orgId,
+          includeOptionalScopes: includeBusyRead === true,
+          ...(appId ? { appId } : {}),
+          ...(returnPath !== undefined ? { returnPath } : {}),
+        },
+      );
+      return ok({
+        connectUrl: r?.connectUrl,
+        expiresAt: r?.expiresAt,
+        includesBusyRead: includeBusyRead === true,
+        next: "Send connectUrl to the person. After they approve, google_calendar_status shows connected.",
+      });
+    },
+  );
+
+  tool(
+    "google_calendar_set_return_path",
+    'Save on an app the page the browser returns to after a Google Calendar connection started for that app (google_calendar_connect with appId, or the site\'s own "connect" button through POST /integrations/oauth/google_calendar/initiate with appId). Only a path, e.g. "/#admin": the domain is always the app\'s own at the moment of connecting, so a later domain change needs nothing here. Stored as settings.googleCalendar.returnPath. null removes it (back to "/").',
+    {
+      appId: z.string().describe("App id or slug"),
+      returnPath: z
+        .string()
+        .nullable()
+        .describe('A path starting with "/", e.g. "/#admin". null removes it'),
+      organizationId: GCAL_ORG,
+    },
+    async ({
+      appId,
+      returnPath,
+      organizationId,
+    }: {
+      appId: string;
+      returnPath: string | null;
+      organizationId?: string;
+    }) => {
+      if (returnPath !== null) {
+        const path = returnPath.trim();
+        if (!path.startsWith("/") || path.startsWith("//") || path.includes("\\") || /\s/.test(path)) {
+          throw new Error('returnPath must be a path on the app starting with "/" (e.g. "/#admin"), with no domain and no spaces.');
+        }
+        returnPath = path;
+      }
+      const orgId = await resolveOrg(organizationId);
+      const app = await getApi().request<any>("GET", `/organizations/${orgId}/apps/${appId}`);
+      const current: Record<string, unknown> =
+        app && typeof app.settings === "object" && app.settings !== null ? app.settings : {};
+      const merged = mergeSettings(current, { googleCalendar: { returnPath } });
+      const updated = await getApi().request<any>(
+        "PATCH",
+        `/organizations/${orgId}/apps/${appId}`,
+        { settings: merged },
+      );
+      return ok({
+        appId: updated?.id ?? app?.id ?? appId,
+        returnPath: (updated?.settings ?? merged)?.googleCalendar?.returnPath ?? null,
+      });
+    },
+  );
+
+  tool(
+    "google_calendar_disconnect",
+    "Disconnect the signed-in user's Google Calendar from TaskLite: the access is revoked at Google and forgotten here. Events already in the calendar stay where they are. Every app of this user stops writing to the calendar until it is connected again. Only when the person asked for it.",
+    { organizationId: GCAL_ORG },
+    async ({ organizationId }: { organizationId?: string }) => {
+      const orgId = await resolveOrg(organizationId);
+      await getApi()
+        .request("DELETE", `/integrations/google_calendar?${q({ orgId })}`)
+        .catch(gcalHint);
+      return ok({ disconnected: true });
+    },
+  );
+
+  tool(
+    "google_calendar_ensure_calendar",
+    'Find, or create the first time, the calendar TaskLite keeps in the user\'s Google account under a name (default "פגישות"). It appears in their Google Calendar beside their own calendars, with its own colour, on every device. Returns { calendarId, created }. The event tools find it by name themselves; call this to know the id or to create it ahead.',
+    {
+      name: z.string().optional().describe('The calendar\'s name, default "פגישות"'),
+      description: z.string().optional().describe("Shown in Google Calendar under the name"),
+      timeZone: GCAL_TZ,
+      organizationId: GCAL_ORG,
+    },
+    async ({
+      name,
+      description,
+      timeZone,
+      organizationId,
+    }: {
+      name?: string;
+      description?: string;
+      timeZone?: string;
+      organizationId?: string;
+    }) => {
+      const orgId = await resolveOrg(organizationId);
+      return ok(
+        await getApi()
+          .request("POST", `${GCAL}/calendar?${q({ organizationId: orgId })}`, {
+            summary: name || "פגישות",
+            ...(description ? { description } : {}),
+            timeZone: timeZone || "Asia/Jerusalem",
+            organizationId: orgId,
+          })
+          .catch(gcalHint),
+      );
+    },
+  );
+
+  tool(
+    "google_calendar_list_events",
+    "The events of a TaskLite calendar in the user's Google account that touch the days from..to (inclusive), in order, with times as the wall clock in timeZone. Each: id (for update and delete), summary, description, location, date, endDate, from, to (null for an all-day event), allDay, attendees, htmlLink.",
+    {
+      ...GCAL_CAL,
+      from: DATE.describe("First day, YYYY-MM-DD"),
+      to: DATE.describe("Last day, YYYY-MM-DD"),
+      timeZone: GCAL_TZ,
+      organizationId: GCAL_ORG,
+    },
+    async (a: {
+      calendarId?: string;
+      calendarName?: string;
+      from: string;
+      to: string;
+      timeZone?: string;
+      organizationId?: string;
+    }) => {
+      const orgId = await resolveOrg(a.organizationId);
+      const calendarId = await calendarIdFor(orgId, a);
+      const events = await getApi()
+        .request(
+          "GET",
+          `${GCAL}/events?${q({ organizationId: orgId, calendarId, from: a.from, to: a.to, timeZone: a.timeZone || "Asia/Jerusalem" })}`,
+        )
+        .catch(gcalHint);
+      return ok({ calendarId, events });
+    },
+  );
+
+  const EVENT_FIELDS = {
+    description: z.string().optional().describe("Details shown in the event"),
+    location: z.string().optional().describe("Where, as text"),
+    from: TIME.optional().describe("Start time HH:MM. Leave from and to out for an all-day event"),
+    to: TIME.optional().describe("End time HH:MM"),
+    endDate: DATE.optional().describe("Last day YYYY-MM-DD, for an event over several days"),
+    attendees: z
+      .array(z.string().email())
+      .optional()
+      .describe("Guests' email addresses. Invited (Google emails them, and again on every change) only with sendInvitations true"),
+    sendInvitations: z
+      .boolean()
+      .optional()
+      .describe("Email the attendees. Default false: only with the person's clear wish"),
+  };
+
+  tool(
+    "google_calendar_create_event",
+    "Add an event to a TaskLite calendar in the user's Google account. Times are wall clock in timeZone; from and to both left out make an all-day event. key (e.g. the row id of the booking) makes it safe to call again: the same key updates the one event instead of adding a second, and brings it back if it was deleted. Returns the event with its id.",
+    {
+      ...GCAL_CAL,
+      summary: z.string().min(1).describe("The title"),
+      date: DATE.describe("The day, YYYY-MM-DD"),
+      ...EVENT_FIELDS,
+      key: z.string().optional().describe("A stable id of your own for this event, e.g. the row id"),
+      timeZone: GCAL_TZ,
+      organizationId: GCAL_ORG,
+    },
+    async (a: any) => {
+      const orgId = await resolveOrg(a.organizationId);
+      const calendarId = await calendarIdFor(orgId, a);
+      const { calendarName, organizationId, timeZone, ...event } = a;
+      void calendarName;
+      void organizationId;
+      return ok(
+        await getApi()
+          .request("POST", `${GCAL}/event?${q({ organizationId: orgId })}`, {
+            ...event,
+            calendarId,
+            timeZone: timeZone || "Asia/Jerusalem",
+            organizationId: orgId,
+          })
+          .catch(gcalHint),
+      );
+    },
+  );
+
+  tool(
+    "google_calendar_update_event",
+    "Change some fields of an event (id from google_calendar_list_events or create). What is not given stays: moving only from/to keeps the day, moving only date keeps the hours (and the length of a multi-day event). attendees replaces the list; they are emailed only with sendInvitations true.",
+    {
+      ...GCAL_CAL,
+      eventId: z.string().describe("The event's id"),
+      summary: z.string().min(1).optional().describe("New title"),
+      date: DATE.optional().describe("New day, YYYY-MM-DD"),
+      ...EVENT_FIELDS,
+      timeZone: GCAL_TZ,
+      organizationId: GCAL_ORG,
+    },
+    async (a: any) => {
+      const orgId = await resolveOrg(a.organizationId);
+      const calendarId = await calendarIdFor(orgId, a);
+      const { calendarName, organizationId, timeZone, eventId, ...changes } = a;
+      void calendarName;
+      void organizationId;
+      return ok(
+        await getApi()
+          .request(
+            "PATCH",
+            `${GCAL}/event/${encodeURIComponent(eventId)}?${q({ organizationId: orgId })}`,
+            { ...changes, calendarId, timeZone: timeZone || "Asia/Jerusalem", organizationId: orgId },
+          )
+          .catch(gcalHint),
+      );
+    },
+  );
+
+  tool(
+    "google_calendar_delete_event",
+    "Delete one event from a TaskLite calendar in the user's Google account. Deleting one already gone is not an error (alreadyGone true). notifyAttendees true emails its guests that it was cancelled.",
+    {
+      ...GCAL_CAL,
+      eventId: z.string().describe("The event's id"),
+      notifyAttendees: z.boolean().optional().describe("Email the guests a cancellation. Default false"),
+      organizationId: GCAL_ORG,
+    },
+    async (a: {
+      calendarId?: string;
+      calendarName?: string;
+      eventId: string;
+      notifyAttendees?: boolean;
+      organizationId?: string;
+    }) => {
+      const orgId = await resolveOrg(a.organizationId);
+      const calendarId = await calendarIdFor(orgId, a);
+      return ok(
+        await getApi()
+          .request(
+            "DELETE",
+            `${GCAL}/event/${encodeURIComponent(a.eventId)}?${q({ organizationId: orgId, calendarId, notifyAttendees: a.notifyAttendees ? "true" : undefined })}`,
+          )
+          .catch(gcalHint),
+      );
+    },
+  );
+
+  tool(
+    "google_calendar_busy",
+    "When the user is already busy, across their own Google calendars (not the details, only the times), between two days: [{ date, from, to }] as wall clock in timeZone, so a booking page can offer only free slots. Declined invitations, events marked free and holiday calendars do not count. Needs the busy-read consent: when it is missing the answer says so, and google_calendar_connect with includeBusyRead true makes the link for it.",
+    {
+      from: DATE.describe("First day, YYYY-MM-DD"),
+      to: DATE.describe("Last day, YYYY-MM-DD"),
+      timeZone: GCAL_TZ,
+      excludeCalendarId: z
+        .string()
+        .optional()
+        .describe("A calendar to leave out, usually the TaskLite one whose bookings the app already knows"),
+      organizationId: GCAL_ORG,
+    },
+    async (a: {
+      from: string;
+      to: string;
+      timeZone?: string;
+      excludeCalendarId?: string;
+      organizationId?: string;
+    }) => {
+      const orgId = await resolveOrg(a.organizationId);
+      return ok(
+        await getApi()
+          .request(
+            "GET",
+            `${GCAL}/busy?${q({ organizationId: orgId, from: a.from, to: a.to, timeZone: a.timeZone || "Asia/Jerusalem", excludeCalendarId: a.excludeCalendarId })}`,
+          )
+          .catch(gcalHint),
+      );
     },
   );
 
