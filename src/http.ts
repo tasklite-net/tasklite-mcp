@@ -59,23 +59,48 @@ function sendJson(res: http.ServerResponse, status: number, body: unknown, heade
   res.end(JSON.stringify(body));
 }
 
-export async function readBody(req: http.IncomingMessage, maxBytes = MAX_BODY_BYTES): Promise<unknown> {
-  const declared = Number(req.headers['content-length'] || 0);
-  if (declared > maxBytes) throw new BodyTooLargeError();
-  const chunks: Buffer[] = [];
-  let total = 0;
-  for await (const chunk of req) {
-    total += chunk.length;
-    if (total > maxBytes) throw new BodyTooLargeError();
-    chunks.push(Buffer.from(chunk));
-  }
-  const raw = Buffer.concat(chunks).toString('utf8');
-  if (!raw) return undefined;
-  try {
-    return JSON.parse(raw);
-  } catch {
-    throw new BadJsonError();
-  }
+// Read with listeners, not `for await`: leaving a for-await loop early destroys the request, and
+// with it the socket, before the 413 can be written. Here an oversized body is no longer kept but
+// keeps flowing, so the client can finish sending and then read the answer.
+export function readBody(req: http.IncomingMessage, maxBytes = MAX_BODY_BYTES): Promise<unknown> {
+  return new Promise((resolve, reject) => {
+    const declared = Number(req.headers['content-length'] || 0);
+    if (declared > maxBytes) {
+      req.resume();
+      reject(new BodyTooLargeError());
+      return;
+    }
+    const chunks: Buffer[] = [];
+    let total = 0;
+    let settled = false;
+    req.on('data', (chunk: Buffer) => {
+      if (settled) return; // over the limit: discard what is still arriving
+      total += chunk.length;
+      if (total > maxBytes) {
+        settled = true;
+        chunks.length = 0;
+        reject(new BodyTooLargeError());
+        return;
+      }
+      chunks.push(Buffer.from(chunk));
+    });
+    req.on('end', () => {
+      if (settled) return;
+      settled = true;
+      const raw = Buffer.concat(chunks).toString('utf8');
+      if (!raw) return resolve(undefined);
+      try {
+        resolve(JSON.parse(raw));
+      } catch {
+        reject(new BadJsonError());
+      }
+    });
+    req.on('error', (err) => {
+      if (settled) return;
+      settled = true;
+      reject(err);
+    });
+  });
 }
 
 const API_URL = (process.env.TASKLITE_API_URL || 'https://api.tasklite.net').replace(/\/+$/, '');
@@ -118,7 +143,9 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
     body = await readBody(req);
   } catch (err) {
     if (err instanceof BodyTooLargeError) {
-      // The rest of the upload is not read; closing the connection stops it.
+      // The rest of the upload is discarded as it arrives (readBody), so the client gets to read this
+      // answer. A client that keeps sending is cut off after a few seconds.
+      setTimeout(() => req.destroy(), 5000).unref();
       return sendJson(
         res,
         413,

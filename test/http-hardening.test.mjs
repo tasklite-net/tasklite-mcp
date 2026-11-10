@@ -78,6 +78,23 @@ test('a body over the limit is refused with 413', async () => {
   assert.equal(res.status, 413);
 });
 
+test('a streamed body with no declared length is cut off at the limit with 413', async () => {
+  const status = await new Promise((resolve, reject) => {
+    const req = http.request(
+      { host: '127.0.0.1', port, path: '/mcp', method: 'POST', agent: false, headers: { 'content-type': 'application/json', authorization: 'Bearer tl_x' } },
+      (res) => {
+        res.resume();
+        res.on('end', () => resolve(res.statusCode));
+      },
+    );
+    req.on('error', reject);
+    const chunk = Buffer.alloc(1024 * 1024, 120);
+    for (let i = 0; i < 17; i++) req.write(chunk);
+    req.end();
+  }).catch(() => 0);
+  assert.equal(status, 413);
+});
+
 test('a valid discovery request still works', async () => {
   const res = await post(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'ping' }), { accept: 'application/json, text/event-stream' });
   assert.equal(res.status, 200);
