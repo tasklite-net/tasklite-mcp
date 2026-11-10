@@ -51,6 +51,10 @@ const HOST = process.env.HOST || '127.0.0.1';
 // deploy_frontend call with inline files (8 MB decoded, about 11 MB as base64).
 export const MAX_BODY_BYTES = 16 * 1024 * 1024;
 
+// How long, and how much, an oversized upload is still read (and thrown away) after the 413.
+const DRAIN_MS = 30_000;
+const DRAIN_BYTES = 128 * 1024 * 1024;
+
 export class BodyTooLargeError extends Error {}
 export class BadJsonError extends Error {}
 
@@ -143,15 +147,25 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
     body = await readBody(req);
   } catch (err) {
     if (err instanceof BodyTooLargeError) {
-      // The rest of the upload is discarded as it arrives (readBody), so the client gets to read this
-      // answer. A client that keeps sending is cut off after a few seconds.
-      setTimeout(() => req.destroy(), 5000).unref();
-      return sendJson(
-        res,
-        413,
-        { jsonrpc: '2.0', error: { code: -32600, message: 'Request body too large' }, id: null },
-        { Connection: 'close' },
-      );
+      // The answer is written now, but the connection is NOT closed while the upload is still arriving:
+      // closing a socket that has unread data makes the kernel send a reset, and on Linux the client
+      // then loses the 413 it had not read yet. The rest of the body is discarded as it arrives
+      // (readBody), the connection stays open until the client has finished sending, and only a
+      // client that is still sending after DRAIN_MS, or that sends more than DRAIN_BYTES, is cut off.
+      let drained = 0;
+      const giveUp = setTimeout(() => req.destroy(), DRAIN_MS);
+      giveUp.unref();
+      req.on('data', (chunk: Buffer) => {
+        drained += chunk.length;
+        if (drained > DRAIN_BYTES) req.destroy();
+      });
+      req.on('end', () => clearTimeout(giveUp));
+      req.on('close', () => clearTimeout(giveUp));
+      return sendJson(res, 413, {
+        jsonrpc: '2.0',
+        error: { code: -32600, message: 'Request body too large' },
+        id: null,
+      });
     }
     if (err instanceof BadJsonError) {
       return sendJson(res, 400, { jsonrpc: '2.0', error: { code: -32700, message: 'Parse error' }, id: null });
