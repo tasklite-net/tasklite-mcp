@@ -13,8 +13,14 @@ are folded into the next published one, so the numbers on npm may skip.
   `google_calendar_update_event`, `google_calendar_delete_event`, `google_calendar_busy`,
   `google_calendar_disconnect`. The connection is the signed-in user's, held by TaskLite; writes
   go to calendars TaskLite creates in that Google account. Needs the backend change
-  (tasklite-net/tasklite, branch feat/gcal-mcp-e2e): status, single-event routes, `connectUrl`
+  (tasklite-net/tasklite#426): status, single-event routes, `connectUrl`
   and `appId`/`returnPath` on initiate.
+
+### Changed
+- `create_column`, `update_column` and the server instructions describe sealed columns
+  (`settings.sealed: { normalize: "il_id" | "digits" | "text" }`): an ID number is stored only as
+  a keyed server-side fingerprint, found by filtering with the plain value, and kept unique with
+  `settings.validation.unique`. Needs the backend change (tasklite-net/tasklite, sealed columns).
 
 ## 0.22.1, 2026-11-08
 
