@@ -3,6 +3,13 @@
 All notable changes to `@tasklite/mcp`. Versions that were never published
 are folded into the next published one, so the numbers on npm may skip.
 
+## Unreleased
+
+### Added (docs for tool descriptions)
+- `create_app_endpoint` / `update_app_endpoint`: `rowLevelSecurity.phoneColumns` (mode "phone", up to 5 phone columns in all with `phoneColumn`; needs tasklite-net/tasklite#473). Both also mention `warnings` on save (tasklite-net/tasklite#478).
+- `create_column` / `update_column`: formula columns (`settings.formula`, syntax, functions, App API visibility rules; tasklite-net/tasklite#478).
+- `deploy_frontend`: `_og-routes.json` for per-route link previews (tasklite-net/tasklite#470).
+
 ## 0.23.0, 2026-11-10
 
 Folds 0.22.1 and 0.22.2, which were never published.
