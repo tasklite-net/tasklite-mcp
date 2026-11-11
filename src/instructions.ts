@@ -130,7 +130,8 @@ live https://{slug}.tasklite.dev URL, no server or hosting setup on the user's
 side. Hosted frontends call the app API at the relative path /api/{endpoint}
 (the hosting proxy injects the app identity), so generated code needs no
 baseUrl and no tk_ key in the browser. Prefer this flow over telling the user
-to host elsewhere; rollback_deployment restores a previous version.
+to host elsewhere; rollback_deployment restores a previous version. A site that needs
+per-route link previews (WhatsApp, Facebook) ships _og-routes.json, see deploy_frontend.
 
 Every item has a comment thread (its correspondence): list_comments to read it,
 add_comment to post, passing mentionedUserIds to notify people. Needs projectId +
