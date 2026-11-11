@@ -1212,6 +1212,11 @@ export const BUILD_RLS_SCHEMA = z
       .string()
       .optional()
       .describe(`${RLS_FIELDS.phoneColumn}. The NAME of a column of this board in the spec`),
+    phoneColumns: z
+      .array(z.string())
+      .max(5)
+      .optional()
+      .describe(`${RLS_FIELDS.phoneColumns}. The NAMES of columns of this board in the spec`),
     emailColumn: z
       .string()
       .optional()
@@ -1274,7 +1279,7 @@ type BuildRlsRefs = Partial<
     | "identityEmailColumn",
     { board: string; column: string }
   >
->;
+> & { phoneColumns?: Array<{ board: string; column: string }> };
 
 export function planBuildRls(
   board: BuildRlsBoard,
@@ -1310,7 +1315,7 @@ export function planBuildRls(
     }
   }
   if (mode !== "phone") {
-    const stray = (["phoneColumn", "emailColumn"] as const).filter(
+    const stray = (["phoneColumn", "phoneColumns", "emailColumn"] as const).filter(
       (k) => rls[k] !== undefined,
     );
     if (stray.length) {
@@ -1325,6 +1330,29 @@ export function planBuildRls(
       problems.push(
         `${where}: mode "phone" needs phoneColumn, the name of the phone column of ${board.name}`,
       );
+    }
+    if (rls.phoneColumns !== undefined) {
+      const all = [rls.phoneColumn, ...rls.phoneColumns].filter(
+        (n): n is string => !!n,
+      );
+      const distinct = new Set(all.map((n) => n.toLowerCase()));
+      if (distinct.size > 5) {
+        problems.push(
+          `${where}.phoneColumns: at most 5 phone columns in all together with phoneColumn (got ${distinct.size})`,
+        );
+      }
+      const found: Array<{ board: string; column: string }> = [];
+      for (const name of rls.phoneColumns) {
+        const col = findColumn(board, name);
+        if (!col) {
+          problems.push(
+            `${where}.phoneColumns: "${name}" is not a column of ${board.name} (have: ${board.columns.map((c) => c.name).join(", ")})`,
+          );
+        } else {
+          found.push({ board: board.name, column: col.name });
+        }
+      }
+      refs.phoneColumns = found;
     }
     for (const k of ["phoneColumn", "emailColumn"] as const) {
       const name = rls[k];
@@ -5984,6 +6012,17 @@ Roles are keys from list_app_roles, plus "*" (any signed-in user) and "public". 
                 );
               }
               out[k] = id;
+            }
+            if (spec.phoneColumns !== undefined) {
+              out.phoneColumns = (refs.phoneColumns ?? []).map((r, i) => {
+                const id = columnId(r);
+                if (!id) {
+                  throw new Error(
+                    `${boards[boardIndex].name}.rowLevelSecurity.phoneColumns: column "${spec.phoneColumns![i]}" was not found among the columns just created`,
+                  );
+                }
+                return id;
+              });
             }
             for (const k of [
               "allowInvites",

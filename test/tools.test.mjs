@@ -325,6 +325,20 @@ test('planBuildRls mirrors the server rules about which field goes with which mo
   assert.equal(p(boards[3], { mode: 'shared' }), '');
 });
 
+test('planBuildRls resolves phoneColumns by name, phone mode only, max 5 in all', () => {
+  const board = {
+    name: 'Stores',
+    columns: ['Phone', 'Manager 2', 'M3', 'M4', 'M5', 'M6'].map((name) => ({ name, type: 'phone' })),
+  };
+  const plan = (rls) => planBuildRls(board, rls, [board]);
+  const ok = plan({ mode: 'phone', phoneColumn: 'Phone', phoneColumns: ['manager 2'] });
+  assert.deepEqual(ok.problems, []);
+  assert.deepEqual(ok.refs.phoneColumns, [{ board: 'Stores', column: 'Manager 2' }]);
+  assert.match(plan({ mode: 'phone', phoneColumn: 'Phone', phoneColumns: ['Nope'] }).problems.join(), /"Nope" is not a column/);
+  assert.match(plan({ mode: 'phone', phoneColumn: 'Phone', phoneColumns: ['Manager 2', 'M3', 'M4', 'M5', 'M6'] }).problems.join(), /at most 5/);
+  assert.match(plan({ mode: 'shared', phoneColumns: ['Manager 2'] }).problems.join(), /only apply to mode "phone"/);
+});
+
 // ── Settings ─────────────────────────────────────────────────────────────────
 
 test('mergeSettings merges objects at depth, replaces arrays, and removes on null', () => {
