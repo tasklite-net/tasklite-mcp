@@ -11,6 +11,7 @@ Folds 0.22.1 and 0.22.2, which were never published.
 - `create_app_endpoint` / `update_app_endpoint` / `build_backend`: `rowLevelSecurity.phoneColumns` (mode "phone", up to 5 phone columns in all with `phoneColumn`; names in build_backend; needs tasklite-net/tasklite#473). Endpoint tools also mention `warnings` on save (tasklite-net/tasklite#478).
 - `create_column` / `update_column`: formula columns (`settings.formula`, syntax, functions, App API visibility rules; tasklite-net/tasklite#478).
 - `deploy_frontend`: `_og-routes.json` for per-route link previews (tasklite-net/tasklite#470).
+- `create_automation`: `{{...}}` placeholders in the body of `http_request` (object or JSON string, a bare placeholder for a number) and in the value of `set_column_value`, lookup / rollup / formula columns included (needs tasklite-net/tasklite#494).
 
 ### Added (permissions)
 - `get_permission_history`: what changed in roles, grants, the identity board and board policies of an app, with who and when and the value before and after (needs the backend with tasklite-net/tasklite#429).
