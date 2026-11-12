@@ -3,6 +3,11 @@
 All notable changes to `@tasklite/mcp`. Versions that were never published
 are folded into the next published one, so the numbers on npm may skip.
 
+## Unreleased
+
+### Added (docs for tool descriptions)
+- `create_automation`: `{{...}}` placeholders in the body of `http_request` (object or JSON string, a bare placeholder for a number) and in the value of `set_column_value`, lookup / rollup / formula columns included (needs tasklite-net/tasklite#494).
+
 ## 0.23.0, 2026-11-10
 
 Folds 0.22.1 and 0.22.2, which were never published.
