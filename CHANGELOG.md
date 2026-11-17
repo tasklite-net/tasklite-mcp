@@ -3,7 +3,7 @@
 All notable changes to `@tasklite/mcp`. Versions that were never published
 are folded into the next published one, so the numbers on npm may skip.
 
-## Unreleased
+## 0.24.0 (2026-11-17)
 
 ### Added (scheduled automations: cron and perBoard)
 - `create_automation` / `update_automation`: the descriptions said the scheduled trigger "has no cron expression" and takes only `{ intervalHours, runAtHour }` in UTC. That has not been true of the backend for a while: `{ cron, timezone }` (five fields, an IANA zone, default Asia/Jerusalem; `{ cron: "0 22 * * *" }` is 22:00 Israel time all year) is read, and the older form still works. The tools, `instructions.ts`, `skill/SKILL.md` and `GEMINI.md` now say so. `triggerConfig` was already passed to the backend unchanged, so no code change was needed for `cron` and `timezone`.
