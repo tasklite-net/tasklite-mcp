@@ -84,10 +84,26 @@ docs/app-access.md.
 ## Automations
 
 `create_automation`, `update_automation`, `list_automations`. The `scheduled`
-trigger is checked hourly and takes `{ intervalHours, runAtHour }` with
-`runAtHour` in UTC; it reads no cron expression. `send_push` notifies app
-users on their phones (`push_status` first, `send_test_push` to try); the last
-segment of its `recipientsFromRelation` path must be a people column.
+trigger takes `{ cron, timezone }`: five cron fields and an IANA zone
+(default `Asia/Jerusalem`), so `{ cron: "0 22 * * *" }` is 22:00 Israel time
+all year, daylight saving included. The older `{ intervalHours, runAtHour }`
+still works, with `runAtHour` in UTC. By default a scheduled run executes the
+actions once for every row; `perBoard: true` in the trigger config runs them
+once per occurrence with no row. Only `send_email` (fixed addresses in `to`),
+`http_request` (no `responseMapping`) and `send_webhook` are allowed then, with
+no conditions, and any other action is refused when saved. Row placeholders
+are empty there; `{{run.date}}` (local day, YYYY-MM-DD), `{{run.occurrence}}`
+(ISO time of the occurrence, the same on every retry), `{{run.timezone}}`,
+`{{run.automationId}}` and `{{run.boardId}}` are filled, and `send_webhook`
+adds `perBoard`, `automationId`, `occurrence` and `timezone` to its JSON.
+Example, one daily report at 22:00 Israel time: trigger `scheduled`, config
+`{ cron: "0 22 * * *", perBoard: true }`, action `http_request` POST to the
+app's server with body `{ day: "{{run.date}}", runId:
+"{{run.automationId}}@{{run.occurrence}}" }`; the server ignores a `runId` it
+has seen, builds the report and sends it with `POST /apps/<slug>/api/_email/send`.
+`send_push` notifies app users on their phones (`push_status` first,
+`send_test_push` to try); the last segment of its `recipientsFromRelation`
+path must be a people column.
 
 ## Schema patterns (the value you add)
 

@@ -44,9 +44,15 @@ it calls the API and writes the answer straight into columns via
 responseMapping [{ path, columnId }] (ids from get_board_schema). With the
 "scheduled" trigger the board refreshes itself, so do not tell the user they
 need Make or n8n for this. https only; internal hosts are refused. The
-scheduled trigger takes { intervalHours, runAtHour } (runAtHour is in UTC),
-not a cron expression. send_push is the action that reaches an app user's
-phone.
+scheduled trigger takes { cron, timezone } (five fields, an IANA zone,
+Asia/Jerusalem by default, so { cron: "0 22 * * *" } is 22:00 Israel time all
+year) or the older { intervalHours, runAtHour } (runAtHour is in UTC). By
+default a scheduled run executes the actions once per row of the board; add
+perBoard: true to run them once per occurrence with no row (a daily report:
+one http_request to the app's own server, or one send_email to fixed
+addresses; only send_email, http_request and send_webhook are allowed, no
+conditions, and {{run.date}} and {{run.occurrence}} are available as
+placeholders). send_push is the action that reaches an app user's phone.
 
 Only if the user wants an external frontend/app: create_app (needs projectId) ->
 create_app_endpoint (choose exposedColumns; enable rowLevelSecurity whenever

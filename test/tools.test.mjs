@@ -619,8 +619,14 @@ test('create_automation describes the scheduled trigger and send_push as the eng
   const { tools } = await client.listTools();
   const t = tools.find((x) => x.name === 'create_automation');
   const all = JSON.stringify(t);
-  assert.equal(/\{ cron:/.test(all), false, 'no cron example');
+  assert.equal(/no cron expression/.test(all), false, 'does not deny cron');
+  assert.equal(/A cron field is not read/.test(all), false, 'does not deny cron');
   for (const word of [
+    '{ cron: \\"0 22 * * *\\" }',
+    'Asia/Jerusalem',
+    'perBoard',
+    '{{run.date}}',
+    '{{run.occurrence}}',
     'intervalHours',
     'runAtHour',
     'UTC',
@@ -635,6 +641,58 @@ test('create_automation describes the scheduled trigger and send_push as the eng
   ]) {
     assert.ok(all.includes(word), `mentions ${word}`);
   }
+});
+
+test('create_automation passes cron, timezone and perBoard to the backend unchanged', async () => {
+  const triggerConfig = { cron: '0 22 * * *', timezone: 'Asia/Jerusalem', perBoard: true };
+  const { calls, call } = await harness();
+  const res = await call('create_automation', {
+    projectId: 'p1',
+    boardId: 'b1',
+    name: 'Daily report',
+    trigger: 'scheduled',
+    triggerConfig,
+    actions: [
+      {
+        type: 'http_request',
+        config: { url: 'https://app.example.com/jobs/daily-report', method: 'POST', body: { day: '{{run.date}}' } },
+      },
+    ],
+  });
+  assert.equal(res.isError, false, res.text);
+  assert.equal(calls.length, 1, 'one request, not refused by the tool');
+  assert.deepEqual(calls[0].body.triggerConfig, triggerConfig);
+});
+
+test('create_automation still demands a responseMapping on http_request unless the run is perBoard', async () => {
+  const action = { type: 'http_request', config: { url: 'https://api.example.com/x' } };
+  for (const triggerConfig of [{ cron: '0 22 * * *' }, { cron: '0 22 * * *', perBoard: false }, undefined]) {
+    const { calls, call } = await harness();
+    const res = await call('create_automation', {
+      projectId: 'p1',
+      boardId: 'b1',
+      name: 'x',
+      trigger: 'scheduled',
+      triggerConfig,
+      actions: [action],
+    });
+    assert.match(res.json.error, /needs responseMapping/, JSON.stringify(triggerConfig));
+    assert.equal(calls.length, 0);
+  }
+});
+
+test('update_automation sends cron, timezone and perBoard as given', async () => {
+  const { calls, call } = await harness();
+  await call('update_automation', {
+    projectId: 'p1',
+    boardId: 'b1',
+    automationId: 'a1',
+    triggerConfig: { cron: '0 8 * * 1', timezone: 'Europe/London', perBoard: true },
+  });
+  assert.equal(calls[0].method, 'PATCH');
+  assert.deepEqual(calls[0].body, {
+    triggerConfig: { cron: '0 8 * * 1', timezone: 'Europe/London', perBoard: true },
+  });
 });
 
 // ── Status columns: dropdowns named like a status, and the status filter ──────

@@ -30,7 +30,11 @@ rows through `create_app_invite` or `link_app_user` (ids from
 people only with a code. Also: `configure_app_settings`, `delete_app_endpoint`.
 
 Automations: `create_automation`, triggers on changes or `scheduled`
-(`{ intervalHours, runAtHour }`, UTC, no cron); actions include
+(`{ cron, timezone }`, default Asia/Jerusalem, e.g. `{ cron: "0 22 * * *" }`; or
+the older `{ intervalHours, runAtHour }` in UTC; add `perBoard: true` to run the
+actions once per occurrence with no row, only `send_email` to fixed addresses,
+`http_request` and `send_webhook`, no conditions, placeholders `{{run.date}}`
+and `{{run.occurrence}}`); actions include
 `http_request` (write an API answer into columns), `send_webhook`
 (signed, retried), `delay` (resume later), `send_email`, `send_whatsapp`,
 `send_push` (to app users' phones).
