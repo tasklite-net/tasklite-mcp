@@ -5,6 +5,11 @@ are folded into the next published one, so the numbers on npm may skip.
 
 ## Unreleased
 
+### Added (scheduled automations: cron and perBoard)
+- `create_automation` / `update_automation`: the descriptions said the scheduled trigger "has no cron expression" and takes only `{ intervalHours, runAtHour }` in UTC. That has not been true of the backend for a while: `{ cron, timezone }` (five fields, an IANA zone, default Asia/Jerusalem; `{ cron: "0 22 * * *" }` is 22:00 Israel time all year) is read, and the older form still works. The tools, `instructions.ts`, `skill/SKILL.md` and `GEMINI.md` now say so. `triggerConfig` was already passed to the backend unchanged, so no code change was needed for `cron` and `timezone`.
+- `triggerConfig.perBoard: true` on a scheduled automation runs the actions once per occurrence with no row, instead of once per row (a daily report needs one run). Only `send_email` with fixed addresses, `http_request` without `responseMapping` and `send_webhook` are allowed, with no conditions; row placeholders are empty and `{{run.date}}`, `{{run.occurrence}}`, `{{run.timezone}}`, `{{run.automationId}}`, `{{run.boardId}}` are filled; `send_webhook` adds `perBoard`, `automationId`, `occurrence` and `timezone` to its JSON. Needs the backend with tasklite-net/tasklite#533: do not publish this before that is deployed.
+- `create_automation` no longer demands a `responseMapping` on an `http_request` when `triggerConfig.perBoard` is true (a perBoard run has no row to write into).
+
 ### Added (docs for tool descriptions)
 - `create_automation`: `{{...}}` placeholders in the body of `http_request` (object or JSON string, a bare placeholder for a number) and in the value of `set_column_value`, lookup / rollup / formula columns included (needs tasklite-net/tasklite#494).
 
