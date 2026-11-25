@@ -84,6 +84,13 @@ PATCH  /organizations/<orgId>/apps/<appId>/users/<userId>   { role?, isActive? }
    On a site TaskLite hosts, the relative `/api/<endpoint>` with the same
    header works too.
 4. Add each person who runs the app with `add_app_user`.
+5. For a person whose phone gets no SMS (a kosher phone), add them with
+   `add_app_user { email }` and give the sign-in screen a "get the code by
+   email" button, shown only while `GET /auth/otp/options?appId=<app id>`
+   answers `email: true`. It sends `POST /auth/otp/send` with
+   `{ email, organizationId, appId, channel: "email" }` and no phone, then
+   `POST /auth/otp/verify` as usual. A mailbox the owner did not add gets
+   `403 OTP_EMAIL_NOT_REGISTERED`, and nothing is sent.
 
 Do not build the list of allowed people into the page (a board of phones the
 page checks, an invite code the owner types in). The access list is enforced

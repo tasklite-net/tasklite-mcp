@@ -922,7 +922,7 @@ const ANNOTATIONS: Record<string, Record<string, unknown>> = {
     openWorldHint: false,
   },
   add_app_user: {
-    title: "Give a phone access to an app",
+    title: "Give a phone or an email access to an app",
     readOnlyHint: false,
     destructiveHint: false,
     // Asking again for the same phone only sets its role again.
@@ -4459,7 +4459,7 @@ export function registerTools(
 
   tool(
     "list_app_users",
-    'List the people of an app, as { users, pending }. users: everyone who ever called it with X-App-User or signed in to it with a code. Each has userId (the id set_app_user_role, remove_app_user, link_app_user, list_app_user_links and send_test_push take), externalId (the developer\'s own id for them, or null for a user who signed in by code), name, phone (the phone they proved with a code, or null), source (api or otp), role (viewer, editor or submitter), isActive, hasAccessRow, lastSeenAt and itemCount (rows they own on the app\'s boards). hasAccessRow says whether they are on the app\'s access list: when it is false, role and isActive are only defaults, and an endpoint in row-level security mode "shared" refuses them with 403 until add_app_user or set_app_user_role puts them on the list. pending: the phones add_app_user is still holding access for, each with id, phone, role, createdAt, expiresAt and status (pending, or expired); they get in on their first sign-in with a code. Use it to see who can use the app and to find the userId of a person.',
+    'List the people of an app, as { users, pending }. users: everyone who ever called it with X-App-User or signed in to it with a code. Each has userId (the id set_app_user_role, remove_app_user, link_app_user, list_app_user_links and send_test_push take), externalId (the developer\'s own id for them, or null for a user who signed in by code), name, phone (the phone they proved with a code, or null), email (the mailbox they proved with an email code, or null), source (api or otp), role (viewer, editor or submitter), isActive, hasAccessRow, lastSeenAt and itemCount (rows they own on the app\'s boards). hasAccessRow says whether they are on the app\'s access list: when it is false, role and isActive are only defaults, and an endpoint in row-level security mode "shared" refuses them with 403 until add_app_user or set_app_user_role puts them on the list. pending: the phones and mailboxes add_app_user is still holding access for, each with id, phone (null for a mailbox), email (null for a phone), role, createdAt, expiresAt and status (pending, or expired); they get in on their first sign-in with a code. Use it to see who can use the app and to find the userId of a person.',
     {
       appId: z
         .string()
@@ -4484,15 +4484,22 @@ export function registerTools(
 
   tool(
     "add_app_user",
-    'Give a person access to an app by their phone number: the phone and a role, nothing else. This is how the people who run an app (the business owner, a manager, staff) get into its admin screen, whose endpoints are in row-level security mode "shared". The person needs no invite code and does not have to sign in first. If the phone already signed in to this organization with a code, access is on at once and the answer has status "active" and their userId. Otherwise the answer has status "pending" and a pendingId: nothing is created for the number yet, and the access opens by itself the first time that phone signs in to the app with an SMS code (POST /auth/otp/send, then /auth/otp/verify). The phone is matched whatever its spelling: 054-1234567, +972 54 123 4567 and 972541234567 are one number; a number outside Israel needs its country code. Calling again for the same phone sets its role again, and switches back on a user who was switched off. Roles: editor (reads and writes), viewer (reads), submitter (creates). The app must still sign people in by phone code; a person who signs in another way (email and password, Google) is a different account, give them access with set_app_user_role after their first sign-in. Requires organization owner or admin (an editor gets 403).',
+    'Give a person access to an app by their phone number: the phone and a role, nothing else. This is how the people who run an app (the business owner, a manager, staff) get into its admin screen, whose endpoints are in row-level security mode "shared". The person needs no invite code and does not have to sign in first. If the phone already signed in to this organization with a code, access is on at once and the answer has status "active" and their userId. Otherwise the answer has status "pending" and a pendingId: nothing is created for the number yet, and the access opens by itself the first time that phone signs in to the app with an SMS code (POST /auth/otp/send, then /auth/otp/verify). The phone is matched whatever its spelling: 054-1234567, +972 54 123 4567 and 972541234567 are one number; a number outside Israel needs its country code. Calling again for the same phone sets its role again, and switches back on a user who was switched off. Roles: editor (reads and writes), viewer (reads), submitter (creates). The app must still sign people in by phone code; a person who signs in another way (email and password, Google) is a different account, give them access with set_app_user_role after their first sign-in. A person whose phone gets no SMS (a kosher phone) can be let in by email instead: pass email (alone, or with phone to let in both); the access opens the first time that mailbox signs in with a code sent by email (POST /auth/otp/send with { email, organizationId, appId, channel: "email" } and no phone, then /auth/otp/verify). That sign-in is offered only while GET /auth/otp/options?appId=<app id> answers email: true; show its button only then. Pass at least one of phone and email. Requires organization owner or admin (an editor gets 403).',
     {
       appId: z
         .string()
         .describe("App id or slug (from list_apps / create_app)"),
       phone: z
         .string()
+        .optional()
         .describe(
-          'The phone number, e.g. "0541234567" or "+972541234567"; any spelling of an Israeli mobile, or any other number with its country code',
+          'The phone number, e.g. "0541234567" or "+972541234567"; any spelling of an Israeli mobile, or any other number with its country code. Pass this or email, or both',
+        ),
+      email: z
+        .string()
+        .optional()
+        .describe(
+          "The email address of a person who signs in with a code by email (their phone gets no SMS). Pass this or phone, or both",
         ),
       role: z
         .enum(["viewer", "editor", "submitter"])
@@ -4516,9 +4523,14 @@ export function registerTools(
           "Organization id; defaults to the credential organization when omitted",
         ),
     },
-    async ({ appId, phone, role, expiresInDays, organizationId }) => {
+    async ({ appId, phone, email, role, expiresInDays, organizationId }) => {
+      if (!phone && !email) {
+        throw new Error("Pass phone or email (or both).");
+      }
       const orgId = await resolveOrg(organizationId);
-      const body: Record<string, unknown> = { phone };
+      const body: Record<string, unknown> = {};
+      if (phone !== undefined) body.phone = phone;
+      if (email !== undefined) body.email = email;
       if (role !== undefined) body.role = role;
       if (expiresInDays !== undefined) body.expiresInDays = expiresInDays;
       return ok(
