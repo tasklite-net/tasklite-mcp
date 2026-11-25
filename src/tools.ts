@@ -6198,7 +6198,7 @@ Roles are keys from list_app_roles, plus "*" (any signed-in user) and "public". 
             config: z
               .record(z.any())
               .describe(
-                'Action-specific config, e.g. { url, method, headers, responseMapping } for http_request, { title, body, recipientsFromRelation, includeRowOwner, userIds, data, sound, badge, dataOnly } for send_push, or { to, subject, body, kind: "transactional" | "marketing", attachments: ["<file column id>"] } for send_email',
+                'Action-specific config, e.g. { url, method, headers, responseMapping } for http_request, { title, body, recipientsFromRelation, includeRowOwner, userIds, data, sound, badge, dataOnly } for send_push, or { to, subject, body, kind: "transactional" | "marketing", attachments: ["<file column id>"] } for send_email. A digest mail on a "scheduled" trigger (one run per row, not perBoard) can list rows of ANOTHER board of the same project that belong to that row: send_email config.relatedRows: [{ key: "late" (letters, digits, _), boardId, match: { columnId: "<column on that board>", to: "item" (a relation column on that board pointing to this board) | "<column id on this board>" (equal values: text and email case-insensitive, phone by digits, people by user id) }, conditions?: [{ field, operator, value }] (the automation condition grammar, AND), dateWindow?: { columnId: "dueDate" | "<date column>", from?: "today-7", to?: "today+3" } (days relative to today, inclusive; overdue = { to: "today-1" }), columns?: [up to 8 column ids or status, priority, dueDate, assignedTo, tags; the title is always first], sort?: { columnId, direction?: "asc" | "desc" }, limit?: 1..200 (default 50), emptyText?, moreText?: "ועוד {n} נוספים" }] (1 to 5 blocks), and skipIfAllEmpty?: true (send nothing when every block is empty). In body {{rows:<key>}} is the table and {{count:<key>}} the number of rows; in subject only {{count:<key>}}; every block must be used. The server refuses another project or organization, unknown keys, sealed columns, and more than 5000 candidate rows per block (the run fails, never a silent cut).',
               ),
           }),
         )
@@ -6289,7 +6289,7 @@ Roles are keys from list_app_roles, plus "*" (any signed-in user) and "public". 
         .array(
           z.object({
             type: z.string().describe("Action type, as in create_automation"),
-            config: z.record(z.any()).describe("Action-specific config"),
+            config: z.record(z.any()).describe("Action-specific config, same shapes as in create_automation (send_email takes relatedRows and skipIfAllEmpty there too)"),
           }),
         )
         .optional()
