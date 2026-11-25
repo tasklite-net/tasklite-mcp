@@ -4,6 +4,9 @@ All notable changes to `@tasklite/mcp`. Versions that were never published
 are folded into the next published one, so the numbers on npm may skip.
 
 ## Unreleased
+### Added (digest mails)
+- `create_automation` / `update_automation` describe `send_email` `relatedRows` and `skipIfAllEmpty` (a scheduled mail per row listing rows of another board of the same project, tasklite-net/tasklite#640 and #641). The config was already passed through as is; only the description is new.
+
 
 ### Added (sign-in with a code by email)
 - `add_app_user` takes `email` (alone, or with `phone`): a person whose phone gets no SMS (a kosher phone) is let in by mailbox and signs in with a code by email. `list_app_users` shows `email` on users and on pending entries. `docs/app-access.md` says how a login screen offers it (only while `GET /auth/otp/options?appId=` answers `email: true`). Needs the backend with tasklite-net/tasklite (OTP_APP_EMAIL_LOGIN): do not publish before that is deployed.
