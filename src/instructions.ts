@@ -170,6 +170,11 @@ recording) and each finished call is a row on a board. set_telephony_ivr_form
 column each, thanks), get_telephony_ivr_form, clear_telephony_ivr_form, and
 get_telephony_ivr_instructions, the two settings lines the CUSTOMER pastes into
 the extension in the Yemot site (the link is a secret: only to the app's owner).
+send_telephony_outbound rings (tzintuk), calls and reads a text aloud (voice) or
+texts (sms, Israeli mobiles) a list of up to 200 phones the app owner supplied,
+through the owner's own Yemot account (their units are charged). Only on the
+owner's explicit request with their list; never invent numbers, never resend
+after an "unknown" outcome; report the counts it returns.
 
 Google Calendar is held by TaskLite on the server for the signed-in user (no
 Google key in the app, ever). google_calendar_status says whether it is

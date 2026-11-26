@@ -4,6 +4,9 @@ All notable changes to `@tasklite/mcp`. Versions that were never published
 are folded into the next published one, so the numbers on npm may skip.
 
 ## Unreleased
+### Added (outbound rings, calls and texts, Yemot HaMashiach)
+- `send_telephony_outbound`: with provider `yemot`, rings once (tzintuk), calls and reads a text aloud (voice) or sends an SMS (Israeli mobiles) to 1 to 200 phones the app owner supplied, through the owner's own Yemot account (units are charged to them). Returns counts only (requested, valid, sent, rejected, masked invalid, outcome). Marked destructive and open-world; the description limits it to the owner's explicit request with their own list. A 404 is reported as "not enabled yet". Needs a backend with the outbound endpoint and the server switches TELEPHONY_YEMOT and TELEPHONY_YEMOT_OUTBOUND: do not publish before that is deployed.
+
 ### Added (phone sign-up forms, Yemot HaMashiach)
 - `get_telephony_ivr_form`, `set_telephony_ivr_form`, `clear_telephony_ivr_form` and `get_telephony_ivr_instructions`: provider `yemot` (an Israeli phone IVR) lets an extension in the customer's phone menu ask a caller questions (digits, a number, a phone, one key out of choices, or a voice recording) and write each finished call as a row on a board of the app. `set_telephony_ivr_form` replaces the whole form (1 to 12 steps); `get_telephony_ivr_instructions` returns the two settings lines the customer pastes into the extension in the Yemot site (the link is a secret). Yemot has no call log, so `configure_telephony_mapping` and `run_telephony_sync` do not apply to it. A 404 from these four tools is reported as "not enabled yet". Needs the backend with tasklite-net/tasklite#655 and the server switch TELEPHONY_YEMOT: do not publish before that is deployed.
 
