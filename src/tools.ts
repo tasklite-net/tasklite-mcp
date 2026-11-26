@@ -667,6 +667,35 @@ const ANNOTATIONS: Record<string, Record<string, unknown>> = {
     idempotentHint: true,
     openWorldHint: false,
   },
+  get_telephony_ivr_form: {
+    title: "Read a phone sign-up form",
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: true,
+    openWorldHint: false,
+  },
+  set_telephony_ivr_form: {
+    title: "Set a phone sign-up form",
+    readOnlyHint: false,
+    destructiveHint: false,
+    // Replaces the whole form: the same call twice leaves the same form.
+    idempotentHint: true,
+    openWorldHint: false,
+  },
+  clear_telephony_ivr_form: {
+    title: "Remove a phone sign-up form",
+    readOnlyHint: false,
+    destructiveHint: true,
+    idempotentHint: true,
+    openWorldHint: false,
+  },
+  get_telephony_ivr_instructions: {
+    title: "Get the phone menu settings to paste",
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: true,
+    openWorldHint: false,
+  },
   list_uploaded_files: {
     title: "List files on an item",
     readOnlyHint: true,
@@ -3625,6 +3654,110 @@ export function registerTools(
       const orgId = await resolveOrg(organizationId);
       await getApi().request("DELETE", `/organizations/${idSeg(orgId)}/apps/${idSeg(appId)}/telephony/connection`);
       return ok({ disconnected: true });
+    },
+  );
+
+  // Phone sign-up forms (provider yemot): an extension in the customer's phone
+  // menu asks questions and each finished call becomes one row. Behind a server
+  // flag: while it is off the routes answer 404.
+  const IVR_BASE = (orgId: string, appId: string) =>
+    `/organizations/${idSeg(orgId)}/apps/${idSeg(appId)}/telephony`;
+  const IVR_NOT_ENABLED =
+    "404: phone sign-up forms are not enabled on this server yet (the Yemot provider is behind a server switch), or the app was not found. Check the app id with list_apps; if it is right, the feature is not on yet. Tell the customer it is coming and do not retry.";
+  async function ivrCall(run: () => Promise<unknown>) {
+    try {
+      return ok(await run());
+    } catch (e) {
+      if (e instanceof TaskLiteApiError && e.status === 404) {
+        return { isError: true, content: [{ type: "text" as const, text: IVR_NOT_ENABLED }] };
+      }
+      throw e;
+    }
+  }
+
+  tool(
+    "get_telephony_ivr_form",
+    "Read-only. The phone sign-up form of an app (provider yemot, Yemot HaMashiach): { ivrForm } with the board, greeting, steps, thanks and the optional caller phone and call id columns, or { ivrForm: null } when none is set. See set_telephony_ivr_form for what a form is. Needs the server to have phone forms on: a 404 means it is not enabled yet.",
+    { appId: TELEPHONY_APP_ID, organizationId: TELEPHONY_ORG_ID },
+    async ({ appId, organizationId }: { appId: string; organizationId?: string }) => {
+      const orgId = await resolveOrg(organizationId);
+      return ivrCall(() => getApi().request("GET", `${IVR_BASE(orgId, appId)}/ivr-form`));
+    },
+  );
+
+  tool(
+    "set_telephony_ivr_form",
+    'Set the phone sign-up form of an app: an extension in the customer\'s Yemot HaMashiach phone menu (an Israeli phone IVR provider, "yemot") asks the caller questions, by keypad or a voice recording, and every finished call becomes one row on a board of the app. Use it for people without a smartphone who call a number to register for an event, pledge a donation, place an order or report attendance. Replaces the whole form. This provider has no call log, so configure_telephony_mapping and run_telephony_sync do not apply to it. Steps (1 to 12, asked in order): key (letters and digits only, up to 20, unique in the form, must not start with "api" and must not be "hangup"), prompt (Hebrew, up to 300 characters, read aloud to the caller by text to speech), type, columnId (the board column that gets the answer, one column per step, never two steps on one column). Types: digits = any digits such as an ID number, min and max are the fewest and most digits (1 to 30); number = an amount or quantity, written to the column as a number, min and max again count digits; phone = a phone number; choice = one key out of choices, { "1": "text", "2": "text" } (digits 0 to 9, 1 to 10 choices, each text different and up to 60 characters), and the column gets the chosen text, so for a dropdown or status column write the labels exactly as the column\'s options; record = a voice recording, the column (text) gets a reference to the file in the customer\'s Yemot system, not the audio. Column types that fit: digits text, phone or number; number number or text; phone phone or text; choice text, dropdown or status; record text. Because the prompts are read aloud, write short plain Hebrew sentences, no symbols or punctuation tricks, and say what to press, e.g. "הקישו את מספר המשתתפים ולסיום סולמית". greeting is said once before the first question (optional); thanks is said after the row is saved (required). callerPhoneColumnId (phone or text) receives the caller\'s number and callIdColumnId (text) Yemot\'s call id, both optional and not shared with a step column. savePartialOnHangup: true saves the answers given so far when the caller hangs up halfway. Column ids come from get_board_schema; the board and its columns must be in the app\'s project. After saving, give the customer the settings from get_telephony_ivr_instructions to paste into the extension. Needs the server to have phone forms on: a 404 means it is not enabled yet. Admin of the app.',
+    {
+      appId: TELEPHONY_APP_ID,
+      boardId: z.string().describe("The board that receives a row per finished call"),
+      greeting: z.string().max(300).optional().describe("Hebrew text said once before the first question"),
+      steps: z
+        .array(
+          z
+            .object({
+              key: z
+                .string()
+                .regex(/^[A-Za-z0-9]{1,20}$/)
+                .describe('Letters and digits only, unique in the form; not starting with "api", not "hangup"'),
+              prompt: z
+                .string()
+                .max(300)
+                .describe("Hebrew, read aloud by text to speech: a short plain sentence that says what to press"),
+              type: z.enum(["digits", "number", "phone", "choice", "record"]),
+              min: z.number().int().min(1).max(30).optional().describe("digits and number only: fewest digits"),
+              max: z.number().int().min(1).max(30).optional().describe("digits and number only: most digits"),
+              choices: z
+                .record(z.string().max(60))
+                .optional()
+                .describe('choice only: { "1": "text written to the column", ... }, keys are single digits'),
+              columnId: z.string().describe("Column id of the board that gets this answer (from get_board_schema)"),
+            })
+            .strict(),
+        )
+        .min(1)
+        .max(12)
+        .describe("The questions, in the order they are asked"),
+      callerPhoneColumnId: z.string().optional().describe("Column that gets the caller's number"),
+      callIdColumnId: z.string().optional().describe("Text column that gets Yemot's call id"),
+      thanks: z.string().max(300).describe("Hebrew text said to the caller after the row is saved"),
+      savePartialOnHangup: z.boolean().optional().describe("Save the answers so far if the caller hangs up halfway"),
+      organizationId: TELEPHONY_ORG_ID,
+    },
+    async ({
+      appId,
+      organizationId,
+      ...form
+    }: {
+      appId: string;
+      organizationId?: string;
+      [key: string]: unknown;
+    }) => {
+      const orgId = await resolveOrg(organizationId);
+      return ivrCall(() => getApi().request("PUT", `${IVR_BASE(orgId, appId)}/ivr-form`, form));
+    },
+  );
+
+  tool(
+    "clear_telephony_ivr_form",
+    "Remove the phone sign-up form of an app. Callers who reach the extension afterwards are no longer asked the questions. Rows already written to the board stay. Needs the server to have phone forms on: a 404 means it is not enabled yet. Admin of the app.",
+    { appId: TELEPHONY_APP_ID, organizationId: TELEPHONY_ORG_ID },
+    async ({ appId, organizationId }: { appId: string; organizationId?: string }) => {
+      const orgId = await resolveOrg(organizationId);
+      return ivrCall(async () => {
+        await getApi().request("DELETE", `${IVR_BASE(orgId, appId)}/ivr-form`);
+        return { cleared: true };
+      });
+    },
+  );
+
+  tool(
+    "get_telephony_ivr_instructions",
+    "Read-only. What the CUSTOMER pastes into the settings of the extension in the Yemot HaMashiach management site, so that a call to that extension runs the app's phone sign-up form: { url, settings, text }, where settings is two lines (type=api and api_link=<url>) and text is the same in words for the customer. The link holds a secret key: hand it only to the app's owner, never post it publicly or put it in a page, a repository or a ticket. Set the form first with set_telephony_ivr_form. Needs the server to have phone forms on: a 404 means it is not enabled yet. Admin of the app.",
+    { appId: TELEPHONY_APP_ID, organizationId: TELEPHONY_ORG_ID },
+    async ({ appId, organizationId }: { appId: string; organizationId?: string }) => {
+      const orgId = await resolveOrg(organizationId);
+      return ivrCall(() => getApi().request("GET", `${IVR_BASE(orgId, appId)}/ivr-instructions`));
     },
   );
 
