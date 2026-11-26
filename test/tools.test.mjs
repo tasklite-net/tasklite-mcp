@@ -1439,6 +1439,10 @@ const TELEPHONY_TOOLS = [
   'preview_telephony_sync',
   'run_telephony_sync',
   'disconnect_telephony',
+  'get_telephony_ivr_form',
+  'set_telephony_ivr_form',
+  'clear_telephony_ivr_form',
+  'get_telephony_ivr_instructions',
 ];
 
 test('telephony tools are registered, annotated, and the read-only ones say so', async () => {
@@ -1450,12 +1454,12 @@ test('telephony tools are registered, annotated, and the read-only ones say so',
     assert.ok(t, `${name} is registered`);
     assert.ok(t.annotations?.title, `${name} has a title`);
   }
-  for (const name of ['list_telephony_providers', 'get_telephony_connection', 'preview_telephony_sync']) {
+  for (const name of ['list_telephony_providers', 'get_telephony_connection', 'preview_telephony_sync', 'get_telephony_ivr_form', 'get_telephony_ivr_instructions']) {
     const t = byName.get(name);
     assert.equal(t.annotations.readOnlyHint, true, `${name} is read-only`);
     assert.match(t.description, /^Read-only/, `${name} says so`);
   }
-  for (const name of ['start_telephony_connection', 'configure_telephony_mapping', 'run_telephony_sync', 'disconnect_telephony']) {
+  for (const name of ['start_telephony_connection', 'configure_telephony_mapping', 'run_telephony_sync', 'disconnect_telephony', 'set_telephony_ivr_form', 'clear_telephony_ivr_form']) {
     assert.equal(byName.get(name).annotations.readOnlyHint, false, `${name} writes`);
   }
   assert.equal(byName.get('disconnect_telephony').annotations.destructiveHint, true);
@@ -1526,6 +1530,38 @@ test('test, status and disconnect hit the per-app telephony routes', async () =>
       'GET /telephony-providers',
     ],
   );
+});
+
+test('phone sign-up form tools hit the ivr routes and keep the form whole', async () => {
+  const { calls, call } = await harness();
+  const form = {
+    boardId: 'b1',
+    steps: [
+      { key: 'count', prompt: 'הקישו את מספר המשתתפים ולסיום סולמית', type: 'number', max: 3, columnId: 'c1' },
+      { key: 'kind', prompt: 'לאירוע הקישו אחת', type: 'choice', choices: { 1: 'ערב' }, columnId: 'c2' },
+    ],
+    thanks: 'תודה רבה',
+  };
+  const okRes = await call('set_telephony_ivr_form', { appId: 'app-1', ...form });
+  assert.ok(!okRes.isError);
+  await call('get_telephony_ivr_form', { appId: 'app-1' });
+  await call('clear_telephony_ivr_form', { appId: 'app-1' });
+  await call('get_telephony_ivr_instructions', { appId: 'app-1' });
+  assert.deepEqual(
+    calls.map((c) => `${c.method} ${c.path}`),
+    [
+      `PUT /organizations/${ORG}/apps/app-1/telephony/ivr-form`,
+      `GET /organizations/${ORG}/apps/app-1/telephony/ivr-form`,
+      `DELETE /organizations/${ORG}/apps/app-1/telephony/ivr-form`,
+      `GET /organizations/${ORG}/apps/app-1/telephony/ivr-instructions`,
+    ],
+  );
+  const before = calls.length;
+  const bad = await call('set_telephony_ivr_form', { appId: 'app-1', ...form, steps: [{ ...form.steps[0], type: 'video' }] });
+  assert.equal(bad.isError, true);
+  const none = await call('set_telephony_ivr_form', { appId: 'app-1', ...form, steps: [] });
+  assert.equal(none.isError, true);
+  assert.equal(calls.length, before);
 });
 
 // ── Google Calendar ──────────────────────────────────────────────────────────

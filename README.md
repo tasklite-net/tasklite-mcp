@@ -35,7 +35,7 @@ client can tell what is safe to run unattended.
 | Comments | `list_comments` `add_comment` `update_comment` `delete_comment` |
 | Files | `request_file_upload` `list_uploaded_files` `revoke_upload_link` |
 | Signatures | `create_signature_request` `list_signature_requests` `get_signature_request` `signature_link` `void_signature_request` |
-| Phone systems (PBX) | `list_telephony_providers` `get_telephony_connection` `start_telephony_connection` `test_telephony_connection` `configure_telephony_mapping` `preview_telephony_sync` `run_telephony_sync` `disconnect_telephony` |
+| Phone systems (PBX) | `list_telephony_providers` `get_telephony_connection` `start_telephony_connection` `test_telephony_connection` `configure_telephony_mapping` `preview_telephony_sync` `run_telephony_sync` `disconnect_telephony` `get_telephony_ivr_form` `set_telephony_ivr_form` `clear_telephony_ivr_form` `get_telephony_ivr_instructions` |
 | Google Calendar | `google_calendar_status` `google_calendar_connect` `google_calendar_set_return_path` `google_calendar_ensure_calendar` `google_calendar_list_events` `google_calendar_create_event` `google_calendar_update_event` `google_calendar_delete_event` `google_calendar_busy` `google_calendar_disconnect` |
 | Apps and API | `build_backend` `create_app` `publish_app` `list_apps` `get_app_spec` `create_app_endpoint` `list_app_endpoints` `update_app_endpoint` `delete_app_endpoint` `create_app_api_key` `configure_app_settings` `get_email_usage` |
 | App users, invites and links | `list_app_users` `add_app_user` `set_app_user_role` `remove_app_user` `create_app_invite` `list_app_invites` `revoke_app_invite` `check_invite_code` `link_app_user` `list_app_user_links` `unlink_app_user` |

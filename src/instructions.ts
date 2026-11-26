@@ -161,7 +161,15 @@ list_telephony_providers, then start_telephony_connection returns a one-time lin
 for the CUSTOMER to type the API token on (never ask for it or accept it pasted),
 test_telephony_connection, configure_telephony_mapping (board, columns, optional
 customer by phone and employee by extension), preview_telephony_sync (writes
-nothing) and run_telephony_sync.
+nothing) and run_telephony_sync. The provider yemot (Yemot HaMashiach, an Israeli
+phone IVR) has no call log, so those mapping and sync tools do not apply to it;
+it does phone sign-up forms instead, for people without a smartphone: an
+extension in the customer's phone menu asks questions (keypad or a voice
+recording) and each finished call is a row on a board. set_telephony_ivr_form
+(the whole form: board, steps with a Hebrew prompt read aloud, a type and a
+column each, thanks), get_telephony_ivr_form, clear_telephony_ivr_form, and
+get_telephony_ivr_instructions, the two settings lines the CUSTOMER pastes into
+the extension in the Yemot site (the link is a secret: only to the app's owner).
 
 Google Calendar is held by TaskLite on the server for the signed-in user (no
 Google key in the app, ever). google_calendar_status says whether it is
