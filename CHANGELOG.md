@@ -3,7 +3,7 @@
 All notable changes to `@tasklite/mcp`. Versions that were never published
 are folded into the next published one, so the numbers on npm may skip.
 
-## Unreleased
+## 0.25.0 (2026-11-26)
 ### Added (outbound rings, calls and texts, Yemot HaMashiach)
 - `send_telephony_outbound`: with provider `yemot`, rings once (tzintuk), calls and reads a text aloud (voice) or sends an SMS (Israeli mobiles) to 1 to 200 phones the app owner supplied, through the owner's own Yemot account (units are charged to them). Returns counts only (requested, valid, sent, rejected, masked invalid, outcome). Marked destructive and open-world; the description limits it to the owner's explicit request with their own list. A 404 is reported as "not enabled yet". Needs a backend with the outbound endpoint and the server switches TELEPHONY_YEMOT and TELEPHONY_YEMOT_OUTBOUND: do not publish before that is deployed.
 
