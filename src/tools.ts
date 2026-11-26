@@ -696,6 +696,14 @@ const ANNOTATIONS: Record<string, Record<string, unknown>> = {
     idempotentHint: true,
     openWorldHint: false,
   },
+  send_telephony_outbound: {
+    title: "Ring, call or text a list of phones",
+    readOnlyHint: false,
+    // Places real calls and texts and spends the customer's Yemot units.
+    destructiveHint: true,
+    idempotentHint: false,
+    openWorldHint: true,
+  },
   list_uploaded_files: {
     title: "List files on an item",
     readOnlyHint: true,
@@ -3758,6 +3766,30 @@ export function registerTools(
     async ({ appId, organizationId }: { appId: string; organizationId?: string }) => {
       const orgId = await resolveOrg(organizationId);
       return ivrCall(() => getApi().request("GET", `${IVR_BASE(orgId, appId)}/ivr-instructions`));
+    },
+  );
+
+  tool(
+    "send_telephony_outbound",
+    "Places REAL calls or texts through the app owner's own Yemot HaMashiach account (provider yemot) and the units are charged to THEIR Yemot account. Use it ONLY when the app owner explicitly asks for it in this conversation, and ONLY with the list of phone numbers they gave you: never invent, guess, scrape or pull numbers from a board on your own initiative, never send as a test to numbers nobody supplied, and never repeat a call that already returned a result or outcome \"unknown\" (calls may have gone out). action: tzintuk = ring once and hang up from the system's default caller id; voice = call and read message aloud by text to speech (up to 500 characters); sms = text message to Israeli mobiles only (05x, up to 670 characters, landlines are refused). phones: 1 to 200 numbers per request after removing duplicates; any Israeli spelling is accepted. A daily cap per connection applies (1000 recipients a day by default). The answer has counts only: { requested, valid, sent, rejected, invalid (masks of the last 4 digits), outcome }, outcome is sent, partial, rejected or unknown (unknown: no answer in time, may have been sent, do not resend). Say plainly to the owner how many were sent. Shabbat and holidays are not handled by TaskLite: Yemot may refuse. Needs the server to have outbound on: a 404 means it is not enabled yet. Admin of the app.",
+    {
+      appId: TELEPHONY_APP_ID,
+      action: z.enum(["tzintuk", "voice", "sms"]).describe("tzintuk = ring once, voice = read message aloud, sms = text message"),
+      phones: z.array(z.string().max(30)).min(1).max(200).describe("Phone numbers the app owner supplied, 1 to 200"),
+      message: z.string().max(670).optional().describe("Required for voice (max 500) and sms (max 670); ignored for tzintuk"),
+      organizationId: TELEPHONY_ORG_ID,
+    },
+    async ({
+      appId,
+      organizationId,
+      ...body
+    }: {
+      appId: string;
+      organizationId?: string;
+      [key: string]: unknown;
+    }) => {
+      const orgId = await resolveOrg(organizationId);
+      return ivrCall(() => getApi().request("POST", `${IVR_BASE(orgId, appId)}/outbound`, body));
     },
   );
 

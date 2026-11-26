@@ -1443,6 +1443,7 @@ const TELEPHONY_TOOLS = [
   'set_telephony_ivr_form',
   'clear_telephony_ivr_form',
   'get_telephony_ivr_instructions',
+  'send_telephony_outbound',
 ];
 
 test('telephony tools are registered, annotated, and the read-only ones say so', async () => {
@@ -1459,7 +1460,7 @@ test('telephony tools are registered, annotated, and the read-only ones say so',
     assert.equal(t.annotations.readOnlyHint, true, `${name} is read-only`);
     assert.match(t.description, /^Read-only/, `${name} says so`);
   }
-  for (const name of ['start_telephony_connection', 'configure_telephony_mapping', 'run_telephony_sync', 'disconnect_telephony', 'set_telephony_ivr_form', 'clear_telephony_ivr_form']) {
+  for (const name of ['start_telephony_connection', 'configure_telephony_mapping', 'run_telephony_sync', 'disconnect_telephony', 'set_telephony_ivr_form', 'clear_telephony_ivr_form', 'send_telephony_outbound']) {
     assert.equal(byName.get(name).annotations.readOnlyHint, false, `${name} writes`);
   }
   assert.equal(byName.get('disconnect_telephony').annotations.destructiveHint, true);
@@ -1562,6 +1563,39 @@ test('phone sign-up form tools hit the ivr routes and keep the form whole', asyn
   const none = await call('set_telephony_ivr_form', { appId: 'app-1', ...form, steps: [] });
   assert.equal(none.isError, true);
   assert.equal(calls.length, before);
+});
+
+test('send_telephony_outbound posts the body whole to the outbound route and validates before any call', async () => {
+  const { calls, call, client } = await harness(() => ({ outcome: 'sent', sent: 2 }));
+  const { tools } = await client.listTools();
+  const t = tools.find((x) => x.name === 'send_telephony_outbound');
+  assert.equal(t.annotations.destructiveHint, true);
+  assert.match(t.description, /explicitly asks/);
+  const res = await call('send_telephony_outbound', { appId: 'app-1', action: 'sms', phones: ['0501234567', '0521111111'], message: 'שלום' });
+  assert.ok(!res.isError);
+  assert.equal(calls[0].method, 'POST');
+  assert.equal(calls[0].path, `/organizations/${ORG}/apps/app-1/telephony/outbound`);
+  assert.deepEqual(calls[0].body, { action: 'sms', phones: ['0501234567', '0521111111'], message: 'שלום' });
+  const before = calls.length;
+  for (const bad of [
+    { action: 'fax', phones: ['0501234567'] },
+    { action: 'tzintuk', phones: [] },
+    { action: 'tzintuk', phones: Array.from({ length: 201 }, (_, i) => `050${1000000 + i}`) },
+  ]) {
+    const r = await call('send_telephony_outbound', { appId: 'app-1', ...bad });
+    assert.equal(r.isError, true);
+  }
+  assert.equal(calls.length, before);
+});
+
+test('send_telephony_outbound reports a 404 as not enabled yet', async () => {
+  const { TaskLiteApiError } = await import('../dist/api.js');
+  const { call } = await harness(() => {
+    throw new TaskLiteApiError('TaskLite API POST ... failed (404)', 404, {});
+  });
+  const r = await call('send_telephony_outbound', { appId: 'app-1', action: 'tzintuk', phones: ['0501234567'] });
+  assert.equal(r.isError, true);
+  assert.match(r.text ?? JSON.stringify(r), /not enabled/);
 });
 
 // ── Google Calendar ──────────────────────────────────────────────────────────
